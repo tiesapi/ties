@@ -25,7 +25,11 @@ echo "== 2 bundle"
 cp endpoint/lambda_function.py "$B/"
 mkdir -p "$B/catalog/entries"; cp catalog/keywords.tsv "$B/catalog/"
 if [ -n "$FROM" ]; then
-  for d in "$FROM"/*/; do [ -f "$d/README.md" ] && cp "$d/README.md" "$B/catalog/entries/$(basename "$d")"; done
+  for d in "$FROM"/*/; do d="${d%/}"; n="$(basename "$d")"
+    [ -L "$d" ] || [ -L "$d/README.md" ] && { echo "   skip $n (symlink)"; continue; }   # only real files under the catalog go out
+    [ -f "$d/README.md" ] || continue
+    printf '%s' "$n" | grep -Eq '^[A-Za-z0-9_-][A-Za-z0-9._-]*$' || { echo "   skip $n (name)"; continue; }
+    cp "$d/README.md" "$B/catalog/entries/$n"; done
 else
   for f in catalog/entries/*; do [ -f "$f" ] && cp "$f" "$B/catalog/entries/"; done
 fi
