@@ -4,12 +4,16 @@
 #   2 bundle endpoint/lambda_function.py + catalog/ into one zip
 #   3 aws lambda update-function-code (function ties-api, us-east-1); wait until it is live
 #   4 GET https://tiesapi.com/catalog/<entry> for every entry here and compare the sha256
-# usage : bin/publish [--dry-run]     --dry-run: test and bundle only, nothing sent
+# usage : bin/publish [--dry-run] [--from <catalog dir>]
+#   --dry-run             test and bundle only, nothing sent
+#   --from <dir>          take the entries from a worldline-style catalog: <dir>/<type>/README.md becomes entry <type>,
+#                         byte-exact (default: catalog/entries/ here). Nothing is copied into this repository.
 # needs : zip, aws (logged in), curl, jq, shasum
 set -uo pipefail
 cd "$(dirname "$0")/.." || exit 2
-FN=ties-api; REGION=us-east-1; LIVE=https://tiesapi.com; DRY=0
-[ "${1:-}" = --dry-run ] && DRY=1
+FN=ties-api; REGION=us-east-1; LIVE=https://tiesapi.com; DRY=0; FROM=""
+while [ $# -gt 0 ]; do case "$1" in --dry-run) DRY=1; shift;; --from) FROM="$2"; shift 2;; *) echo "publish: unknown argument $1" >&2; exit 2;; esac; done
+[ -z "$FROM" ] || [ -d "$FROM" ] || { echo "publish: no such catalog dir: $FROM" >&2; exit 2; }
 for t in zip aws curl jq shasum; do command -v "$t" >/dev/null || { echo "publish: needs $t" >&2; exit 2; }; done
 
 B="$(mktemp -d)"
@@ -20,8 +24,14 @@ grep -q ' 0 failed' "$B/test.txt" || { grep FAIL "$B/test.txt"; echo "publish: t
 echo "== 2 bundle"
 cp endpoint/lambda_function.py "$B/"
 mkdir -p "$B/catalog/entries"; cp catalog/keywords.tsv "$B/catalog/"
-for f in catalog/entries/*; do [ -f "$f" ] && cp "$f" "$B/catalog/entries/"; done
+if [ -n "$FROM" ]; then
+  for d in "$FROM"/*/; do [ -f "$d/README.md" ] && cp "$d/README.md" "$B/catalog/entries/$(basename "$d")"; done
+else
+  for f in catalog/entries/*; do [ -f "$f" ] && cp "$f" "$B/catalog/entries/"; done
+fi
+SRC="${FROM:-catalog/entries}"
 (cd "$B" && zip -qr bundle.zip lambda_function.py catalog && unzip -Z1 bundle.zip | grep -v '/$' | sed 's/^/   /')
+for f in "$B"/catalog/entries/*; do [ -f "$f" ] && echo "   $LIVE/catalog/$(basename "$f")  sha256:$(shasum -a 256 "$f" | cut -c1-64)"; done
 [ $DRY -eq 1 ] && { echo "publish: dry run, nothing sent ($B/bundle.zip)"; exit 0; }
 
 echo "== 3 send to $FN ($REGION)"
@@ -34,7 +44,7 @@ echo "   live"
 
 echo "== 4 check $LIVE"
 bad=0
-for f in catalog/entries/*; do
+for f in "$B"/catalog/entries/*; do
   [ -f "$f" ] || continue; n="$(basename "$f")"
   here="sha256:$(shasum -a 256 "$f" | cut -c1-64)"
   there="$(curl -s --max-time 15 "$LIVE/catalog/$n" | jq -r .sha256)"
