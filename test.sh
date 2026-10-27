@@ -5,7 +5,10 @@ ok() { echo "ok   $1"; pass=$((pass+1)); }; bad() { echo "FAIL $1"; fail=$((fail
 T="$(mktemp -d)"; S="$T/ties.jsonl"; X=bin/ties; PORT=${PORT:-8799}
 export TIES_KEY="$(openssl rand -hex 32)"
 curl -s -o /dev/null --max-time 1 "http://127.0.0.1:$PORT/" && { echo "FAIL port $PORT is already in use (a stale serve_local.py?); stop it first"; exit 1; }
-(cd endpoint && exec python3 serve_local.py $PORT) >/dev/null 2>&1 & EP=$!; trap 'kill $EP 2>/dev/null; rm -rf "$T"' EXIT
+# the run's own catalog: two scratch labels; the public catalog holds only what the operator wrote
+mkdir -p "$T/catalog/entries"; cp catalog/keywords.tsv "$T/catalog/"
+printf 'registration: scratch label for the test run\n' > "$T/catalog/entries/registration"; printf 'sop-001: scratch label for the test run\n' > "$T/catalog/entries/sop-001"
+(cd endpoint && TIES_CATALOG="$T/catalog" exec python3 serve_local.py $PORT) >/dev/null 2>&1 & EP=$!; trap 'kill $EP 2>/dev/null; rm -rf "$T"' EXIT
 for i in $(seq 1 20); do curl -s -o /dev/null --max-time 1 "http://127.0.0.1:$PORT/" && break; sleep 0.3; done
 
 # US-1 register
@@ -50,7 +53,7 @@ H2="$($X enter "$CAT/sop-001" "$S1" --parent "$H1" --memo "SOP-001 step 3" --by 
 FID2="$($X id --store "$C")"
 echo "$FID2" | grep -Eq '^theisen-api:[0-9a-f]{16}$' && $X verify --store "$C" >/dev/null && [ "$($X lines --store "$C" | wc -l | tr -d ' ')" = 2 ] && ok "US-8 canonical register: registration on line 1, a labeled entry with a parent, chain verifies ($FID2)" || bad "US-8 register"
 R2="$($X receipt "$H2" --endpoint "$EP" --store "$C")"
-LS="sha256:$(shasum -a 256 catalog/entries/sop-001 | cut -c1-64)"
+LS="sha256:$(shasum -a 256 "$T/catalog/entries/sop-001" | cut -c1-64)"
 [ "$(printf '%s' "$R2" | jq -r .label_sha256)" = "$LS" ] && [ "$(printf '%s' "$R2" | jq -r .inside)" = "$S1" ] && [ "$(printf '%s' "$R2" | jq -r .label)" = "$CAT/sop-001" ] && ok "US-8 receipt binds the label (and the catalog's sha256 of it), the inside and the time" || bad "US-8 receipt: $R2"
 V2="$(printf '%s' "$R2" | jq -c --arg f "$FID2" '{federated_id:$f, hash, issued_at, receipt, label_sha256}' | curl -s -d @- "$EP/verify" | jq -r .valid)"; [ "$V2" = true ] && ok "US-8 receipt verifies (label_sha256 is inside the signature)" || bad "US-8 verify"
 V3="$(printf '%s' "$R2" | jq -c --arg f "$FID2" '{federated_id:$f, hash, issued_at, receipt, label_sha256:"sha256:0000000000000000000000000000000000000000000000000000000000000000"}' | curl -s -d @- "$EP/verify" | jq -r .valid)"; [ "$V3" = false ] && ok "US-8 a changed label_sha256 is refused" || bad "US-8 label_sha256 tamper"
@@ -66,7 +69,7 @@ printf 'opens\topen a session\n' > "$T/kw.tsv"; $X add "$FID" responsibiliTIES "
 H="http://127.0.0.1:$PORT"
 [ "$(curl -s -o /dev/null -w '%{content_type}' -H 'Accept: text/html' "$H/")" = "text/html; charset=utf-8" ] && curl -s -H 'Accept: text/html' "$H/" | grep -q '<h1>TIES</h1>' && ok "GET / for a browser is the page" || bad "home page"
 [ "$(curl -s "$H/" | jq -r '.routes | index("GET /catalog/<entry>")')" != null ] && ok "GET / for curl is JSON and lists GET /catalog/<entry>" || bad "home json"
-SH="sha256:$(shasum -a 256 catalog/entries/sop-001 | cut -c1-64)"
+SH="sha256:$(shasum -a 256 "$T/catalog/entries/sop-001" | cut -c1-64)"
 [ "$(curl -s "$H/catalog" | jq -r '.entries[] | select(.entry=="sop-001") | .sha256')" = "$SH" ] && ok "GET /catalog lists sop-001 with the sha256 of its file" || bad "catalog listing"
 [ "$(curl -s "$H/catalog/sop-001" | jq -j .bytes | shasum -a 256 | cut -c1-64)" = "${SH#sha256:}" ] && ok "GET /catalog/sop-001 returns the exact bytes (they hash to the same sha256)" || bad "catalog entry bytes"
 curl -s -H 'Accept: text/html' "$H/catalog/sop-001" | grep -q '<pre>' && ok "GET /catalog/sop-001 for a browser is the page" || bad "catalog entry page"

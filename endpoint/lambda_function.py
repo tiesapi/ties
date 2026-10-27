@@ -131,10 +131,9 @@ def _page(status, title, body):
     h = html.escape
     doc = (f'<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">'
            f'<title>{h(title)}</title><link rel="icon" href="/favicon.ico" type="image/svg+xml"><style>{STYLE}</style></head><body>'
-           f'<p class="dim"><a href="/">tiesapi.com</a> · <a href="/catalog">catalog</a> · <a href="{SOURCE}">source</a></p>'
+           f'<p class="dim"><a href="/">tiesapi.com</a> · <a href="/catalog">catalog</a></p>'
            f'{body}'
-           f'<p class="dim">Authority: {AUTHORITY}, Dr. Theisen · <a href="https://doctortheisen.com/">doctortheisen.com</a> · '
-           f'Problem? <a href="mailto:{CONTACT}">{CONTACT}</a></p></body></html>\n')
+           f'<p class="dim">Dr. Theisen · <a href="mailto:{CONTACT}">{CONTACT}</a></p></body></html>\n')
     return _raw(status, "text/html; charset=utf-8", doc)
 
 
@@ -153,25 +152,14 @@ def _keyword_items():
 def _home_html():
     h = html.escape
     return _page(200, "TIES", (
-        f"<h1>TIES</h1><p>{h(WHAT)}</p>"
-        "<p>The catalog states the abstract meaning once, in plain words, at a fixed URL. The person keeps the concrete content. "
-        "Anyone can read what was done and when from the labels, without seeing the content.</p>"
-        f"<h2>the catalog</h2><ul>{_entry_items()}</ul>"
-        f"<p class=\"dim\">keywords (the ties, in doctortheisen's words):</p><ul>{_keyword_items()}</ul>"
+        "<h1>TIES</h1>"
         f"<h2>the calls</h2><pre>{h(CALLS)}</pre>"
-        "<p>A browser gets a page; curl gets JSON. Nothing is stored here.</p>"
-        f"<h2>the entry line</h2><p>One file, append-only, one JSON line per entry. POST a line to /receipt; line 1 is the registration.</p><pre>{h(ENTRY_TEXT)}</pre>"
-        "<h2>on your device</h2>"
-        f"<p><code>bin/ties</code>: register, add, context, sop, export, verify, receipt. Source and spec: <a href=\"{SOURCE}\">{h(SOURCE)}</a>. "
-        "Check it yourself: <code>./test.sh</code> runs one check per user story.</p>"
-        "<h2>the first SOP</h2><p><a href=\"/catalog/sop-001\">SOP-001 · register, label, keep</a></p>"))
+        f"<h2>the catalog</h2><ul>{_entry_items()}</ul>"))
 
 
 def _catalog_html():
     return _page(200, "TIES · catalog", (
-        "<h1>the catalog</h1><p>Every label, its URL and the sha256 of its exact bytes. Fetch a URL with curl for JSON.</p>"
-        f"<h2>entries</h2><ul>{_entry_items()}</ul>"
-        f"<h2>keywords</h2><ul>{_keyword_items()}</ul>"))
+        f"<h1>the catalog</h1><ul>{_entry_items()}</ul>"))
 
 
 def _entry_html(e):
@@ -180,8 +168,7 @@ def _entry_html(e):
     title = first[2:].strip() if first.startswith("# ") else e["entry"]
     return _page(200, f"TIES · {title}", (
         f"<h1>{h(title)}</h1><p class=\"dim\">{h(e['url'])}<br>{h(e['sha256'])}</p>"
-        f"<pre>{h(e['bytes'])}</pre>"
-        f"<p class=\"dim\">The hash is of these exact bytes, trailing newline included. <code>curl {h(e['url'])}</code> returns them with the sha256 as JSON.</p>"))
+        f"<pre>{h(e['bytes'])}</pre>"))
 
 
 def _not_found_html(path):
@@ -281,8 +268,7 @@ def _route(method, path, browser, event):
     if method == "GET" and path in ("/", ""):
         if browser:
             return _home_html()
-        return _reply(200, dict(name="TIES API", authority=AUTHORITY, contact=CONTACT, what=WHAT, spec=f"{SOURCE}/blob/main/SPEC.md",
-                                sop=f"{HOME}/catalog/sop-001", source=SOURCE,
+        return _reply(200, dict(name="TIES API", authority=AUTHORITY, contact=CONTACT,
                                 routes=["GET /catalog", "GET /catalog/<entry>", "POST /receipt", "POST /verify"],
                                 receipt={"federated_id": "theisen-api:<16 hex>", "line": ENTRY}))
     if method == "GET" and path == "/catalog":
