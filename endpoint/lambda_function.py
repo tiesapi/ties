@@ -9,11 +9,12 @@ A browser (Accept: text/html) gets a page. Anything else (curl, an agent) gets J
                       line = one canonical register line (SOP-001): n, when, who, label (a catalog URL), inside (sha256 of
                       the content, which stays with the holder), parents, memo, by, prev, hash. Line 1 is the registration.
                       A v0 tie line (SPEC.md: frame "tie", field, value) is still accepted.
-  POST /verify        {"federated_id", "hash", "issued_at", "receipt"} -> {"valid": true|false}
+  POST /verify        {"federated_id", "hash", "issued_at", "receipt", "label_sha256" (entry receipts)} -> {"valid": true|false}
   GET  /robots.txt, /favicon.ico. HEAD answers like GET, without the body.
 
 The catalog is read from catalog/ beside this file (the published bundle) or ../catalog (the repository).
-receipt = HMAC-SHA256(TIES_KEY, federated_id | tie_hash | issued_at), hex.
+receipt = HMAC-SHA256(TIES_KEY, "ties-receipt-v1" | federated_id | hash | issued_at | label_sha256), hex, for an entry line
+(hash already covers label and inside); "ties-receipt-v0" | federated_id | hash | issued_at for a v0 tie line.
 Every JSON reply carries "status" in the body as well as the HTTP status.
 """
 import hashlib, hmac, html, json, os, re
@@ -189,9 +190,10 @@ def _not_found_html(path):
 
 # ---- receipts -----------------------------------------------------------------------------------------------------
 
-def _sign(fid, tie_hash, issued_at):
+def _sign(fid, h, issued_at, label_sha256=None):
     # every field is format-checked before signing (FID, TIE_HASH, ISSUED_AT), so none can contain the separator
-    return hmac.new(_key(), f"ties-receipt-v0|{fid}|{tie_hash}|{issued_at}".encode(), hashlib.sha256).hexdigest()
+    msg = f"ties-receipt-v1|{fid}|{h}|{issued_at}|{label_sha256}" if label_sha256 else f"ties-receipt-v0|{fid}|{h}|{issued_at}"
+    return hmac.new(_key(), msg.encode(), hashlib.sha256).hexdigest()
 
 
 def _check_line(fid, line):
@@ -315,11 +317,16 @@ def _route(method, path, browser, event):
         if err:
             return _reply(400, dict(error=err, entry=ENTRY))
         issued_at = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-        return _reply(201, dict(receipt=_sign(fid, h, issued_at), issued_at=issued_at, hash=h, **extra, federated_id=fid,
-                                authority=AUTHORITY, stored=False, attests=ATTESTS_ENTRY if extra else ATTESTS, contact=CONTACT))
+        return _reply(201, dict(receipt=_sign(fid, h, issued_at, extra.get("label_sha256")), issued_at=issued_at, hash=h, **extra,
+                                federated_id=fid, authority=AUTHORITY, stored=False, attests=ATTESTS_ENTRY if extra else ATTESTS, contact=CONTACT))
     h = req.get("hash") or req.get("tie_hash") or ""
-    issued_at, receipt = req.get("issued_at") or "", req.get("receipt") or ""
+    issued_at, receipt, ls = req.get("issued_at") or "", req.get("receipt") or "", req.get("label_sha256")
     if not (TIE_HASH.match(h) and ISSUED_AT.match(issued_at) and re.fullmatch(r"[0-9a-f]{64}", receipt)):
         return _reply(400, dict(error="hash, issued_at or receipt is not in the expected form"))
-    valid = hmac.compare_digest(_sign(fid, h, issued_at), receipt)
-    return _reply(200, dict(valid=valid, federated_id=fid, hash=h, issued_at=issued_at, attests=ATTESTS))
+    if ls is not None and not (isinstance(ls, str) and TIE_HASH.match(ls)):
+        return _reply(400, dict(error="label_sha256 must be sha256:<64 hex> (from the receipt)"))
+    valid = hmac.compare_digest(_sign(fid, h, issued_at, ls), receipt)
+    out = dict(valid=valid, federated_id=fid, hash=h, issued_at=issued_at)
+    if ls:
+        out["label_sha256"] = ls
+    return _reply(200, dict(**out, attests=ATTESTS_ENTRY if ls else ATTESTS))

@@ -36,7 +36,7 @@ Line 1 is the registration (label .../catalog/registration); the federated id is
 
 POST a line with its federated id (a canonical entry line, or a v0 tie line as below); the endpoint checks the form,
 checks that an entry line's label is in the catalog, and returns a receipt:
-receipt = HMAC-SHA256(authority key, federated id | tie hash | issued_at). It is about who, which tie and when,
+receipt = HMAC-SHA256(authority key, federated id | line hash | issued_at | label sha256 for an entry line). It is about who, which tie and when,
 not only the content. v0 receipts are checked by the authority (`POST /verify`).
 
 What a v0 receipt proves: this tie line was presented at issued_at and hashes to tie_hash. It does not prove who made
