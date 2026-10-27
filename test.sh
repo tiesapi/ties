@@ -8,7 +8,7 @@ curl -s -o /dev/null --max-time 1 "http://127.0.0.1:$PORT/" && { echo "FAIL port
 # the run's own catalog: two scratch labels; the public catalog holds only what the operator wrote
 mkdir -p "$T/catalog/entries"; cp catalog/keywords.tsv "$T/catalog/"
 printf 'registration: scratch label for the test run\n' > "$T/catalog/entries/registration"; printf 'sop-001: scratch label for the test run\n' > "$T/catalog/entries/sop-001"
-(cd endpoint && TIES_CATALOG="$T/catalog" exec python3 serve_local.py $PORT) >/dev/null 2>&1 & EP=$!; trap 'kill $EP 2>/dev/null; rm -rf "$T"' EXIT
+TIES_CATALOG="$T/catalog" python3 endpoint/serve_local.py $PORT >/dev/null 2>&1 & EP=$!   # python itself, so the exit trap really stops it; trap 'kill $EP 2>/dev/null; rm -rf "$T"' EXIT
 for i in $(seq 1 20); do curl -s -o /dev/null --max-time 1 "http://127.0.0.1:$PORT/" && break; sleep 0.3; done
 
 # US-1 register
