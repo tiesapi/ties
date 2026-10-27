@@ -1,0 +1,84 @@
+#!/usr/bin/env bash
+# ties : TIES on the operator's own device. One chain file holds the registration and the ties.
+# authority : theisen-api (Dr. Theisen; https://doctortheisen.com/ ; tiesapi.com). Problem? doctortheisen@gmail.com
+# spec      : SPEC.md beside bin/
+#
+# usage : ties register                                   US-1 answer the registration questions (operator-register)
+#         ties id                                         the federated id (from the first line of the chain)
+#         ties hash <file>                                content address of a file: sha256:<hex>
+#         ties add <from> <keyword> <to> [--memo <text>] [--public] [--attr <k>=<v>]...
+#                                                         append one tie (private unless --public)
+#         ties context <address>                          US-5 every tie touching <address>, both directions
+#         ties sop <address>                              US-4 the steps: ties from <address>, in chain order
+#         ties export [--public] [--out <file>]           US-6 the chain; --public: only public ties, memos kept, attrs dropped
+#         ties verify [--lines]                           the chain intact; --lines: each line's own hash only (public exports)
+#         ties show                                       the ties, one per line
+#         ties receipt <tie hash> [--endpoint <url>]       US-7 receipt from tiesapi.com, kept in <store>.receipts (the chain is not changed)
+#   every command takes [--store <file>] (default ./ties.jsonl) and [--catalog <file>] (default catalog/keywords.tsv beside bin/)
+# exit  : 0 ok | 1 verify failed | 2 invalid call
+set -uo pipefail
+HERE="$(cd "$(dirname "$0")" && pwd)"; OR="$HERE/operator-register"
+CMD="${1:-}"; shift 2>/dev/null
+ENDPOINT="${TIES_ENDPOINT:-https://tiesapi.com}"; STORE="./ties.jsonl"; CATALOG="$HERE/../catalog/keywords.tsv"; MEMO=""; VIS="private"; OUT=""; PUBLIC=0; LINES=0; POS=(); ATTRS=()
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --store) STORE="$2"; shift 2;; --catalog) CATALOG="$2"; shift 2;; --memo) MEMO="$2"; shift 2;;
+    --public) VIS="public"; PUBLIC=1; shift;; --attr) ATTRS+=("$2"); shift 2;; --out) OUT="$2"; shift 2;;
+    --lines) LINES=1; shift;; --endpoint) ENDPOINT="$2"; shift 2;; *) POS+=("$1"); shift;;
+  esac
+done
+die() { echo "ties: $1" >&2; exit 2; }
+sha() { shasum -a 256 | cut -c1-64; }
+fid() { [ -s "$STORE" ] || die "no chain at $STORE; run: ties register"; printf 'theisen-api:%s' "$(printf 'theisen-api|%s' "$(head -1 "$STORE" | jq -r .hash)" | sha | cut -c1-16)"; }
+addr_ok() { printf '%s' "$1" | grep -Eq '^(sha256:[0-9a-f]{64}|theisen-api:[0-9a-f]{16}|[a-z][a-z0-9+.-]*:[^[:space:]]+)$'; }
+keyword_ok() {
+  printf '%s' "$1" | grep -Eq '^[A-Za-z][A-Za-z0-9_.-]*$' || return 1
+  local listed; listed="$(grep -v '^#' "$CATALOG" 2>/dev/null | cut -f1 | grep -v '^$')"
+  [ -z "$listed" ] || printf '%s\n' "$listed" | grep -qx "$1"
+}
+ties_jq() { jq -c 'select(.frame=="tie") | . + {tie: (.value|fromjson)}' "$STORE"; }
+
+case "$CMD" in
+  register) "$OR" interview --store "$STORE" && echo "federated id: $(fid)";;
+  id) fid; echo;;
+  hash) [ -f "${POS[0]:-}" ] || die "usage: ties hash <file>"; printf 'sha256:%s\n' "$(sha < "${POS[0]}")";;
+  add)
+    [ ${#POS[@]} -eq 3 ] || die "usage: ties add <from> <keyword> <to> [--memo <text>] [--public] [--attr k=v]"
+    F="${POS[0]}"; K="${POS[1]}"; T="${POS[2]}"; WHO="$(fid)" || exit 2
+    addr_ok "$F" || die "from is not an address: $F"; addr_ok "$T" || die "to is not an address: $T"
+    keyword_ok "$K" || die "keyword not in the catalog ($CATALOG): $K"
+    A='{}'; for kv in "${ATTRS[@]+"${ATTRS[@]}"}"; do case "$kv" in *=*) A="$(printf '%s' "$A" | jq -c --arg k "${kv%%=*}" --arg v "${kv#*=}" '. + {($k):$v}')";; *) die "attr must be k=v: $kv";; esac; done
+    V="$(jq -cn --arg f "$F" --arg t "$T" --arg vis "$VIS" --arg m "$MEMO" --argjson a "$A" '{from:$f,to:$t,visibility:$vis,memo:$m,attrs:$a}')"
+    n="$(wc -l < "$STORE" | tr -d ' ')"; prev="$(tail -1 "$STORE" | jq -r .hash)"
+    body="$(jq -cn --argjson n "$n" --arg when "$(date "+%Y-%m-%dT%H:%M:%S%z")" --arg who "$WHO" --arg field "$K" --arg value "$V" --arg prev "$prev" \
+      '{n:$n,when:$when,who:$who,frame:"tie",field:$field,value:$value,prev:$prev}')"
+    h="$(printf '%s' "$body" | sha)"
+    printf '%s' "$body" | jq -c --arg h "sha256:$h" '. + {hash:$h}' >> "$STORE"; echo "sha256:$h";;
+  context) [ -n "${POS[0]:-}" ] || die "usage: ties context <address>"
+    ties_jq | jq -r --arg a "${POS[0]}" 'select(.tie.from==$a or .tie.to==$a) | "\(.n)\t\(.tie.from)\t\(.field)\t\(.tie.to)\t\(.tie.visibility)\t\(.tie.memo)"';;
+  sop) [ -n "${POS[0]:-}" ] || die "usage: ties sop <address>"
+    ties_jq | jq -r --arg a "${POS[0]}" 'select(.tie.from==$a) | "\(.field)\t\(.tie.to)\t\(.tie.memo)"' | awk -F'\t' '{printf "step %d\t%s\t%s\t%s\n", NR, $1, $2, $3}';;
+  export)
+    if [ $PUBLIC -eq 1 ]; then
+      R="$(ties_jq | jq -c 'select(.tie.visibility=="public") | del(.tie)')"
+      # attrs may be personal: a public line keeps its own hash, so attrs stay in the hashed value; drop the whole
+      # line instead if any attrs are set, and say so.
+      R="$(printf '%s\n' "$R" | jq -c 'select((.value|fromjson).attrs == {})')"
+      skipped=$(( $(ties_jq | jq -c 'select(.tie.visibility=="public")' | wc -l) - $(printf '%s' "$R" | grep -c . ) ))
+      [ $skipped -gt 0 ] && echo "ties: $skipped public tie(s) with attrs left out (attrs are inside the hash)" >&2
+    else R="$(cat "$STORE")"; fi
+    if [ -n "$OUT" ]; then printf '%s\n' "$R" | grep . > "$OUT"; echo "ties: wrote $OUT" >&2; else printf '%s\n' "$R" | grep .; fi;;
+  verify)
+    if [ $LINES -eq 1 ]; then bad=0; i=0
+      while IFS= read -r line; do h="$(printf '%s' "$line" | jq -c 'del(.hash)' | tr -d '\n' | sha)"
+        [ "sha256:$h" = "$(printf '%s' "$line" | jq -r .hash)" ] || { echo "FAIL line $i"; bad=1; }; i=$((i+1)); done < "$STORE"
+      [ $bad -eq 0 ] && echo "ok   $i lines, each hash recomputes"; exit $bad
+    else "$OR" verify --store "$STORE"; fi;;
+  receipt) [ -n "${POS[0]:-}" ] || die "usage: ties receipt <tie hash>"
+    L="$(jq -c --arg h "${POS[0]}" 'select(.hash==$h)' "$STORE")"; [ -n "$L" ] || die "no line with hash ${POS[0]}"
+    R="$(jq -cn --arg f "$(fid)" --arg l "$L" '{federated_id:$f, line:$l}' | curl -s --max-time 15 -H 'Content-Type: application/json' -d @- "$ENDPOINT/receipt")"
+    [ "$(printf '%s' "$R" | jq -r .status 2>/dev/null)" = 201 ] || { echo "ties: no receipt: $R" >&2; exit 1; }
+    printf '%s' "$R" | jq -c 'del(.status)' >> "$STORE.receipts"; printf '%s' "$R" | jq -c '{receipt, issued_at, tie_hash}';;
+  show) ties_jq | jq -r '"\(.n)\t\(.tie.from)\t\(.field)\t\(.tie.to)\t\(.tie.visibility)\t\(.tie.memo)"';;
+  *) sed -n 2,23p "$0"; exit 2;;
+esac

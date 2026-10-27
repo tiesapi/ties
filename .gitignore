@@ -1,0 +1,4 @@
+.DS_Store
+*.receipts
+ties.jsonl
+__pycache__/

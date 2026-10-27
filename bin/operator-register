@@ -1,0 +1,79 @@
+#!/usr/bin/env bash
+# operator-register : the operator registration interview. The human is the source of truth.
+# authority : theisen-api
+# catalog id: [[ his ]]
+#
+# usage : operator-register interview [--store <file>] [--fields <file>]   ask every question, append each answer
+#         operator-register set <field> <value> [--store <file>]             append one answer (an update)
+#         operator-register show    [--store <file>]                         latest value per field
+#         operator-register hashes  [--store <file>]                         public view: hashes only, no content
+#         operator-register verify  [--store <file>]                         recompute the chain
+#         operator-register questions [--fields <file>]                      print the questions: <frame> TAB <field> TAB <question>
+#   --store   the chain file. default ./operator.jsonl
+#   --fields  the questions, <frame> TAB <field> TAB <question>. default: the list built in below (fields.tsv is a copy to adjust)
+# chain : one JSON object per line {n,when,who,frame,field,value,prev,hash}
+#         hash = sha256 of the line without "hash"; prev = hash of the line before ("" for the first)
+#         an update is a new line for the same field; nothing is rewritten
+# exit  : 0 ok | 1 verify failed | 2 invalid call
+set -uo pipefail
+CMD="${1:-}"; shift 2>/dev/null
+POS=(); STORE="./operator.jsonl"; FIELDS=""
+while [ $# -gt 0 ]; do
+  case "$1" in --store) STORE="$2"; shift 2;; --fields) FIELDS="$2"; shift 2;; *) POS+=("$1"); shift;; esac
+done
+DEFAULT_FIELDS="$(cat <<'F'
+physical	government_name	Government name
+physical	contact	Contact info
+physical	twofa_device	Device like a cell phone, in case of 2FA needed
+virtual	device	Computer or device you use (the one you are using at the time is okay)
+virtual	username	Username on that system
+institution	institution	Institution
+institution	institution_purpose	Its operational purpose, mission and what the organization does
+role	roles_responsibilities	Your operator roles and responsibilities
+role	performance	Your performance: how you are evaluated, what you need to deliver for good performance eval purposes
+role	processes	Structured processes that cross your worldline in your operational activity
+worldline	worldline_purpose	What your actual worldline is, means to you, its purpose and focus
+F
+)"
+fields() { if [ -n "$FIELDS" ]; then cat "$FIELDS"; else printf '%s\n' "$DEFAULT_FIELDS"; fi; }
+sha() { shasum -a 256 | cut -c1-64; }
+tip() { [ -s "$STORE" ] && tail -1 "$STORE" | jq -r .hash || echo ""; }
+frame_of() { fields | awk -F'\t' -v f="$1" '!/^#/ && $2==f {print $1; exit}'; }
+append() { # frame field value
+  local n prev body h
+  n=$( [ -s "$STORE" ] && wc -l < "$STORE" | tr -d ' ' || echo 0 ); prev="$(tip)"
+  body="$(jq -cn --argjson n "$n" --arg when "$(date "+%Y-%m-%dT%H:%M:%S%z")" --arg who "$(whoami)" \
+    --arg frame "$1" --arg field "$2" --arg value "$3" --arg prev "$prev" \
+    '{n:$n,when:$when,who:$who,frame:$frame,field:$field,value:$value,prev:$prev}')"
+  h="$(printf '%s' "$body" | sha)"
+  printf '%s' "$body" | jq -c --arg h "sha256:$h" '. + {hash:$h}' >> "$STORE"
+}
+case "$CMD" in
+  interview)
+    [ -z "$FIELDS" ] || [ -f "$FIELDS" ] || { echo "operator-register: no $FIELDS" >&2; exit 2; }
+    while IFS=$'\t' read -r frame field q <&3; do
+      case "$frame" in ''|\#*) continue;; esac
+      def=""; [ "$field" = device ] && def="$(hostname -s)"; [ "$field" = username ] && def="$(whoami)"
+      printf '[%s] %s%s ' "$frame" "$q" "${def:+ [$def]}" >&2
+      IFS= read -r a || a=""; [ -n "$a" ] || a="$def"
+      append "$frame" "$field" "$a"
+    done 3< <(fields)
+    echo "operator-register: $(wc -l < "$STORE" | tr -d ' ') lines in $STORE, tip $(tip)" >&2;;
+  set)
+    [ ${#POS[@]} -eq 2 ] || { echo "usage: operator-register set <field> <value>" >&2; exit 2; }
+    fr="$(frame_of "${POS[0]}")"; [ -n "$fr" ] || { echo "operator-register: unknown field ${POS[0]}" >&2; exit 2; }
+    append "$fr" "${POS[0]}" "${POS[1]}"; tip;;
+  show)    jq -rs 'group_by(.field) | map(max_by(.n)) | sort_by(.n) | .[] | "\(.frame)\t\(.field)\t\(.value)"' "$STORE";;
+  questions) fields | grep -v '^#' | grep -v '^$';;
+  hashes)  jq -r '"\(.n)\t\(.hash)\t\(.prev)"' "$STORE";;
+  verify)
+    prev=""; i=0; bad=0
+    while IFS= read -r line; do
+      h="$(printf '%s' "$line" | jq -c 'del(.hash)' | tr -d '\n' | sha)"
+      [ "sha256:$h" = "$(printf '%s' "$line" | jq -r .hash)" ] || { echo "FAIL line $i: hash does not recompute"; bad=1; }
+      [ "$prev" = "$(printf '%s' "$line" | jq -r .prev)" ] || { echo "FAIL line $i: prev does not match line $((i-1))"; bad=1; }
+      prev="$(printf '%s' "$line" | jq -r .hash)"; i=$((i+1))
+    done < "$STORE"
+    [ $bad -eq 0 ] && echo "ok   $i lines, chain intact, tip $prev"; exit $bad;;
+  *) sed -n 2,18p "$0"; exit 2;;
+esac
