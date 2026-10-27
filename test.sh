@@ -4,6 +4,7 @@ set -u; cd "$(dirname "$0")"; pass=0; fail=0
 ok() { echo "ok   $1"; pass=$((pass+1)); }; bad() { echo "FAIL $1"; fail=$((fail+1)); }
 T="$(mktemp -d)"; S="$T/ties.jsonl"; X=bin/ties; PORT=${PORT:-8799}
 export TIES_KEY="$(openssl rand -hex 32)"
+curl -s -o /dev/null --max-time 1 "http://127.0.0.1:$PORT/" && { echo "FAIL port $PORT is already in use (a stale serve_local.py?); stop it first"; exit 1; }
 (cd endpoint && exec python3 serve_local.py $PORT) >/dev/null 2>&1 & EP=$!; trap 'kill $EP 2>/dev/null; rm -rf "$T"' EXIT
 for i in $(seq 1 20); do curl -s -o /dev/null --max-time 1 "http://127.0.0.1:$PORT/" && break; sleep 0.3; done
 
