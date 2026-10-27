@@ -67,7 +67,7 @@ Your data stays yours: a git repository or anywhere else. Git is already a conte
     POST /verify            a receipt -> valid or not
 
 Registration is the first receipt, under the registration label. his word: [[ registration as the first /receipt, or its own POST /register ]]
-Live on tiesapi.com now: GET /, GET /catalog, POST /receipt, POST /verify. Missing: GET /catalog/<entry>.
+All five are live on tiesapi.com. A browser gets a page; curl gets JSON.
 Agents: the same calls, also offered as an MCP server (a layer over the calls, not a sixth call).
 
 ## The steps
@@ -90,5 +90,5 @@ present, in order, each with an inside hash. No content is exposed.
 ## Open items
 
 - his word: [[ registration as the first /receipt, or its own POST /register ]]
-- his word: [[ the catalog URL for SOP-001 and for registration ]]
+- the catalog URLs: https://tiesapi.com/catalog/sop-001 and https://tiesapi.com/catalog/registration (the file name is the URL; his word to rename)
 - per-holder keys (federated id from a public key) are in SPEC.md as v1.

@@ -1,0 +1,44 @@
+#!/usr/bin/env bash
+# publish : put the catalog and the endpoint on tiesapi.com, then check it from the outside.
+#   1 ./test.sh must pass (nothing goes out broken)
+#   2 bundle endpoint/lambda_function.py + catalog/ into one zip
+#   3 aws lambda update-function-code (function ties-api, us-east-1); wait until it is live
+#   4 GET https://tiesapi.com/catalog/<entry> for every entry here and compare the sha256
+# usage : bin/publish [--dry-run]     --dry-run: test and bundle only, nothing sent
+# needs : zip, aws (logged in), curl, jq, shasum
+set -uo pipefail
+cd "$(dirname "$0")/.." || exit 2
+FN=ties-api; REGION=us-east-1; LIVE=https://tiesapi.com; DRY=0
+[ "${1:-}" = --dry-run ] && DRY=1
+for t in zip aws curl jq shasum; do command -v "$t" >/dev/null || { echo "publish: needs $t" >&2; exit 2; }; done
+
+echo "== 1 test"
+./test.sh | tail -1 | grep -q ' 0 failed' || { echo "publish: test.sh failed, nothing sent" >&2; exit 1; }
+
+echo "== 2 bundle"
+B="$(mktemp -d)"
+cp endpoint/lambda_function.py "$B/"
+mkdir -p "$B/catalog/entries"; cp catalog/keywords.tsv "$B/catalog/"
+for f in catalog/entries/*; do [ -f "$f" ] && cp "$f" "$B/catalog/entries/"; done
+(cd "$B" && zip -qr bundle.zip lambda_function.py catalog && unzip -Z1 bundle.zip | grep -v '/$' | sed 's/^/   /')
+[ $DRY -eq 1 ] && { echo "publish: dry run, nothing sent ($B/bundle.zip)"; exit 0; }
+
+echo "== 3 send to $FN ($REGION)"
+aws lambda update-function-code --function-name "$FN" --region "$REGION" --zip-file "fileb://$B/bundle.zip" --query 'CodeSha256' --output text || exit 1
+for i in $(seq 1 30); do
+  s="$(aws lambda get-function-configuration --function-name "$FN" --region "$REGION" --query LastUpdateStatus --output text)"
+  [ "$s" = Successful ] && break; [ "$s" = Failed ] && { echo "publish: update failed" >&2; exit 1; }; sleep 1
+done
+echo "   live"
+
+echo "== 4 check $LIVE"
+bad=0
+for f in catalog/entries/*; do
+  [ -f "$f" ] || continue; n="$(basename "$f")"
+  here="sha256:$(shasum -a 256 "$f" | cut -c1-64)"
+  there="$(curl -s --max-time 15 "$LIVE/catalog/$n" | jq -r .sha256)"
+  if [ "$here" = "$there" ]; then echo "   ok   $LIVE/catalog/$n  $here"; else echo "   FAIL $LIVE/catalog/$n  here $here  there $there"; bad=1; fi
+done
+ct="$(curl -s --max-time 15 -o /dev/null -w '%{content_type}' -H 'Accept: text/html' "$LIVE/")"
+case "$ct" in text/html*) echo "   ok   $LIVE/ is a page for a browser ($ct)";; *) echo "   FAIL $LIVE/ for a browser: $ct"; bad=1;; esac
+[ $bad -eq 0 ] && echo "publish: done" || { echo "publish: live site does not match" >&2; exit 1; }
