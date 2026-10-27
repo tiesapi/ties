@@ -29,7 +29,11 @@ The person hashes their own content (`ties hash <file>` or any sha256 tool). Not
 
 POST a tie line with its federated id; the endpoint checks the form and returns a receipt:
 receipt = HMAC-SHA256(authority key, federated id | tie hash | issued_at). It is about who, which tie and when,
-not only the content. v0 receipts are checked by the authority (`POST /verify`). [[ public-key receipts: v1 ]]
+not only the content. v0 receipts are checked by the authority (`POST /verify`).
+
+What a v0 receipt proves: this tie line was presented at issued_at and hashes to tie_hash. It does not prove who made
+the tie: the federated id is as claimed. Proof of who needs a key per operator (the federated id derived from a public
+key, each tie signed by its private key). [[ v1 ]]
 
 ## User stories (each has a check; `./test.sh` runs them all)
 

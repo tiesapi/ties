@@ -16,6 +16,10 @@ CONTACT = "doctortheisen@gmail.com"
 FID = re.compile(r"^theisen-api:[0-9a-f]{16}$")
 ADDR = re.compile(r"^(sha256:[0-9a-f]{64}|theisen-api:[0-9a-f]{16}|[a-z][a-z0-9+.-]*:\S+)$")
 KEYWORD = re.compile(r"^[A-Za-z][A-Za-z0-9_.-]*$")
+TIE_HASH = re.compile(r"^sha256:[0-9a-f]{64}$")
+ISSUED_AT = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$")
+ATTESTS = ("this tie line was presented at issued_at and hashes to tie_hash; the federated id is as claimed by the presenter, "
+           "not proven (v0 has no per-operator keys)")
 MAX_BODY = 16 * 1024
 HERE = os.path.dirname(os.path.abspath(__file__))
 
@@ -45,7 +49,8 @@ def _reply(status, body):
 
 
 def _sign(fid, tie_hash, issued_at):
-    return hmac.new(_key(), f"{fid}|{tie_hash}|{issued_at}".encode(), hashlib.sha256).hexdigest()
+    # every field is format-checked before signing (FID, TIE_HASH, ISSUED_AT), so none can contain the separator
+    return hmac.new(_key(), f"ties-receipt-v0|{fid}|{tie_hash}|{issued_at}".encode(), hashlib.sha256).hexdigest()
 
 
 def _check_line(fid, line):
@@ -81,7 +86,7 @@ def lambda_handler(event, context=None):
             name="TIES API", authority=AUTHORITY, contact=CONTACT,
             what="Records the ties between things, not the things. You keep your things and your chain; "
                  "send a tie line here to get a receipt. Nothing is stored.",
-            spec="https://tiesapi.com/spec", routes=["GET /catalog", "POST /receipt", "POST /verify"]))
+            spec="https://github.com/tiesapi/ties/blob/main/SPEC.md", source="https://github.com/tiesapi/ties", routes=["GET /catalog", "POST /receipt", "POST /verify"]))
     if method == "GET" and path == "/catalog":
         return _reply(200, dict(authority=AUTHORITY, keywords=_catalog()))
     if method != "POST" or path not in ("/receipt", "/verify"):
@@ -106,7 +111,9 @@ def lambda_handler(event, context=None):
             return _reply(400, dict(error=err))
         issued_at = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
         return _reply(201, dict(receipt=_sign(fid, tie_hash, issued_at), issued_at=issued_at, tie_hash=tie_hash,
-                                federated_id=fid, authority=AUTHORITY, stored=False, contact=CONTACT))
+                                federated_id=fid, authority=AUTHORITY, stored=False, attests=ATTESTS, contact=CONTACT))
     tie_hash, issued_at, receipt = req.get("tie_hash") or "", req.get("issued_at") or "", req.get("receipt") or ""
-    valid = bool(receipt) and hmac.compare_digest(_sign(fid, tie_hash, issued_at), receipt)
-    return _reply(200, dict(valid=valid, federated_id=fid, tie_hash=tie_hash, issued_at=issued_at))
+    if not (TIE_HASH.match(tie_hash) and ISSUED_AT.match(issued_at) and re.fullmatch(r"[0-9a-f]{64}", receipt)):
+        return _reply(400, dict(error="tie_hash, issued_at or receipt is not in the expected form"))
+    valid = hmac.compare_digest(_sign(fid, tie_hash, issued_at), receipt)
+    return _reply(200, dict(valid=valid, federated_id=fid, tie_hash=tie_hash, issued_at=issued_at, attests=ATTESTS))
