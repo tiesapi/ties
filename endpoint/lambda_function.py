@@ -5,8 +5,11 @@ A browser (Accept: text/html) gets a page. Anything else (curl, an agent) gets J
   GET  /              what TIES is; the calls; the catalog
   GET  /catalog       the catalog: the tie keywords (catalog/keywords.tsv) and every entry with its URL and sha256
   GET  /catalog/<e>   one entry: the exact bytes of catalog/entries/<e> and their sha256
-  POST /receipt       {"federated_id", "line"}  -> {"receipt", "issued_at", "tie_hash", ...}
-  POST /verify        {"federated_id", "tie_hash", "issued_at", "receipt"} -> {"valid": true|false}
+  POST /receipt       {"federated_id", "line"}  -> {"receipt", "issued_at", "hash", "label", "label_sha256", "inside", ...}
+                      line = one canonical register line (SOP-001): n, when, who, label (a catalog URL), inside (sha256 of
+                      the content, which stays with the holder), parents, memo, by, prev, hash. Line 1 is the registration.
+                      A v0 tie line (SPEC.md: frame "tie", field, value) is still accepted.
+  POST /verify        {"federated_id", "hash", "issued_at", "receipt"} -> {"valid": true|false}
   GET  /robots.txt, /favicon.ico. HEAD answers like GET, without the body.
 
 The catalog is read from catalog/ beside this file (the published bundle) or ../catalog (the repository).
@@ -26,8 +29,24 @@ KEYWORD = re.compile(r"^[A-Za-z][A-Za-z0-9_.-]*$")
 SEGMENT = re.compile(r"^[A-Za-z0-9_-][A-Za-z0-9_.-]*$")
 TIE_HASH = re.compile(r"^sha256:[0-9a-f]{64}$")
 ISSUED_AT = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$")
-ATTESTS = ("this tie line was presented at issued_at and hashes to tie_hash; the federated id is as claimed by the presenter, "
+ATTESTS = ("this line was presented at issued_at and hashes to hash; the federated id is as claimed by the presenter, "
            "not proven (v0 has no per-operator keys)")
+ATTESTS_ENTRY = ("this entry line was presented at issued_at and hashes to hash; its label was in the catalog with label_sha256 "
+                 "at that time; the content behind inside was not seen; the federated id is as claimed by the presenter, "
+                 "not proven (v0 has no per-operator keys)")
+ENTRY = {"n": 1, "when": "2026-10-27T04:30:00-0700", "who": "theisen-api:<16 hex>", "label": f"{HOME}/catalog/<entry>",
+         "inside": "sha256:<64 hex of the exact bytes of your content>", "parents": ["sha256:<hash of an earlier line>"],
+         "memo": "public memo", "by": "human | agent | both", "prev": None, "hash": "sha256:<64 hex of this line without hash>"}
+ENTRY_TEXT = """n        line number, from 1
+when     ISO 8601 with offset
+who      the federated id of the holder (the constant)
+label    a catalog URL: the abstract meaning, public
+inside   sha256:<64 hex> of the exact bytes of the content, private
+parents  list of sha256 of earlier entries this one ties to (empty for the first)
+memo     public memo; outside the content, never changes the inside hash
+by       human | agent | both
+prev     hash of the line before (null on line 1)
+hash     sha256 of the compact line without the hash field"""
 MAX_BODY = 16 * 1024
 HERE = os.path.dirname(os.path.abspath(__file__))
 CATALOG = next((p for p in (os.environ.get("TIES_CATALOG", ""), os.path.join(HERE, "catalog"), os.path.join(HERE, "..", "catalog"))
@@ -140,6 +159,7 @@ def _home_html():
         f"<p class=\"dim\">keywords (the ties, in doctortheisen's words):</p><ul>{_keyword_items()}</ul>"
         f"<h2>the calls</h2><pre>{h(CALLS)}</pre>"
         "<p>A browser gets a page; curl gets JSON. Nothing is stored here.</p>"
+        f"<h2>the entry line</h2><p>One file, append-only, one JSON line per entry. POST a line to /receipt; line 1 is the registration.</p><pre>{h(ENTRY_TEXT)}</pre>"
         "<h2>on your device</h2>"
         f"<p><code>bin/ties</code>: register, add, context, sop, export, verify, receipt. Source and spec: <a href=\"{SOURCE}\">{h(SOURCE)}</a>. "
         "Check it yourself: <code>./test.sh</code> runs one check per user story.</p>"
@@ -175,28 +195,68 @@ def _sign(fid, tie_hash, issued_at):
 
 
 def _check_line(fid, line):
-    """The tie line must be well formed, hash to its own hash, and come from this federated id."""
+    """The line must be JSON, hash to its own hash, and come from this federated id. Returns (hash, extra, error):
+    extra is {label, label_sha256, inside} for a canonical entry line, {} for a v0 tie line."""
     try:
         d = json.loads(line) if isinstance(line, str) else dict(line)
     except (ValueError, TypeError):
-        return None, "line is not JSON"
+        return None, None, "line is not JSON"
     h = d.pop("hash", None)
     body = json.dumps(d, separators=(",", ":"), ensure_ascii=False)
     if h != "sha256:" + hashlib.sha256(body.encode("utf-8")).hexdigest():
-        return None, "line hash does not recompute"
-    if d.get("frame") != "tie" or d.get("who") != fid:
-        return None, "not a tie from this federated id"
+        return None, None, "line hash does not recompute"
+    if d.get("who") != fid:
+        return None, None, "not a line from this federated id"
+    if "label" in d:
+        extra, err = _check_entry(d)
+        return (h, extra, None) if not err else (None, None, err)
+    err = _check_tie(d)
+    return (h, {}, None) if not err else (None, None, err)
+
+
+def _check_entry(d):
+    """A canonical register line (SOP-001). The label must be in the catalog; the content stays with the holder."""
+    label = d.get("label")
+    prefix = f"{HOME}/catalog/"
+    if not (isinstance(label, str) and label.startswith(prefix)):
+        return None, f"label must be a catalog URL: {prefix}<entry>"
+    e = _entry(label[len(prefix):].rstrip("/"))
+    if not e:
+        return None, "label is not in the catalog"
+    if not TIE_HASH.match(d.get("inside") or ""):
+        return None, "inside must be sha256:<64 hex> of your content"
+    parents = d.get("parents")
+    if not isinstance(parents, list) or not all(isinstance(x, str) and TIE_HASH.match(x) for x in parents):
+        return None, "parents must be a list of sha256:<64 hex>"
+    if d.get("by") not in ("human", "agent", "both"):
+        return None, "by must be human, agent or both"
+    if not isinstance(d.get("memo", ""), str):
+        return None, "memo must be text"
+    n, prev = d.get("n"), d.get("prev")
+    if not isinstance(n, int) or isinstance(n, bool) or n < 1:
+        return None, "n must be the line number, from 1"
+    if n == 1 and (prev is not None or label != f"{prefix}registration"):
+        return None, "line 1 is the registration: label .../catalog/registration, prev null"
+    if n > 1 and not (isinstance(prev, str) and TIE_HASH.match(prev)):
+        return None, "prev must be the hash of the line before"
+    return dict(label=label, label_sha256=e["sha256"], inside=d["inside"]), None
+
+
+def _check_tie(d):
+    """A v0 tie line (SPEC.md)."""
+    if d.get("frame") != "tie":
+        return "not a tie line (frame) and not an entry line (label)"
     if not KEYWORD.match(d.get("field") or ""):
-        return None, "keyword is not a word"
+        return "keyword is not a word"
     try:
         v = json.loads(d.get("value") or "")
     except ValueError:
-        return None, "value is not JSON"
+        return "value is not JSON"
     if not (ADDR.match(v.get("from") or "") and ADDR.match(v.get("to") or "")):
-        return None, "from/to are not addresses"
+        return "from/to are not addresses"
     if v.get("visibility") not in ("private", "public"):
-        return None, "visibility must be private or public"
-    return h, None
+        return "visibility must be private or public"
+    return None
 
 
 # ---- the handler --------------------------------------------------------------------------------------------------
@@ -220,7 +280,9 @@ def _route(method, path, browser, event):
         if browser:
             return _home_html()
         return _reply(200, dict(name="TIES API", authority=AUTHORITY, contact=CONTACT, what=WHAT, spec=f"{SOURCE}/blob/main/SPEC.md",
-                                source=SOURCE, routes=["GET /catalog", "GET /catalog/<entry>", "POST /receipt", "POST /verify"]))
+                                sop=f"{HOME}/catalog/sop-001", source=SOURCE,
+                                routes=["GET /catalog", "GET /catalog/<entry>", "POST /receipt", "POST /verify"],
+                                receipt={"federated_id": "theisen-api:<16 hex>", "line": ENTRY}))
     if method == "GET" and path == "/catalog":
         return _catalog_html() if browser else _reply(200, dict(authority=AUTHORITY, keywords=_keywords(), entries=_listing()))
     if method == "GET" and path.startswith("/catalog/"):
@@ -249,14 +311,15 @@ def _route(method, path, browser, event):
     if not FID.match(fid):
         return _reply(400, dict(error="federated_id must look like theisen-api:<16 hex>"))
     if path == "/receipt":
-        tie_hash, err = _check_line(fid, req.get("line"))
+        h, extra, err = _check_line(fid, req.get("line"))
         if err:
-            return _reply(400, dict(error=err))
+            return _reply(400, dict(error=err, entry=ENTRY))
         issued_at = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-        return _reply(201, dict(receipt=_sign(fid, tie_hash, issued_at), issued_at=issued_at, tie_hash=tie_hash,
-                                federated_id=fid, authority=AUTHORITY, stored=False, attests=ATTESTS, contact=CONTACT))
-    tie_hash, issued_at, receipt = req.get("tie_hash") or "", req.get("issued_at") or "", req.get("receipt") or ""
-    if not (TIE_HASH.match(tie_hash) and ISSUED_AT.match(issued_at) and re.fullmatch(r"[0-9a-f]{64}", receipt)):
-        return _reply(400, dict(error="tie_hash, issued_at or receipt is not in the expected form"))
-    valid = hmac.compare_digest(_sign(fid, tie_hash, issued_at), receipt)
-    return _reply(200, dict(valid=valid, federated_id=fid, tie_hash=tie_hash, issued_at=issued_at, attests=ATTESTS))
+        return _reply(201, dict(receipt=_sign(fid, h, issued_at), issued_at=issued_at, hash=h, **extra, federated_id=fid,
+                                authority=AUTHORITY, stored=False, attests=ATTESTS_ENTRY if extra else ATTESTS, contact=CONTACT))
+    h = req.get("hash") or req.get("tie_hash") or ""
+    issued_at, receipt = req.get("issued_at") or "", req.get("receipt") or ""
+    if not (TIE_HASH.match(h) and ISSUED_AT.match(issued_at) and re.fullmatch(r"[0-9a-f]{64}", receipt)):
+        return _reply(400, dict(error="hash, issued_at or receipt is not in the expected form"))
+    valid = hmac.compare_digest(_sign(fid, h, issued_at), receipt)
+    return _reply(200, dict(valid=valid, federated_id=fid, hash=h, issued_at=issued_at, attests=ATTESTS))

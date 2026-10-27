@@ -25,9 +25,17 @@ One line on the operator's own chain (the operator-register line format, so one 
 
 The person hashes their own content (`ties hash <file>` or any sha256 tool). Nothing has to be sent anywhere.
 
+## The canonical register (SOP-001, https://tiesapi.com/catalog/sop-001)
+
+One file, append-only, one JSON line per entry: n, when, who, label (a catalog URL, public), inside (sha256 of the
+exact bytes of the content, which stays with the holder), parents, memo, by (human | agent | both), prev, hash.
+Line 1 is the registration (label .../catalog/registration); the federated id is derived from its inside.
+`ties enter <label> <inside>` writes a line; `ties receipt <hash>` gets its receipt; `ties verify` checks the chain.
+
 ## Receipt (tiesapi.com, stores nothing)
 
-POST a tie line with its federated id; the endpoint checks the form and returns a receipt:
+POST a line with its federated id (a canonical entry line, or a v0 tie line as below); the endpoint checks the form,
+checks that an entry line's label is in the catalog, and returns a receipt:
 receipt = HMAC-SHA256(authority key, federated id | tie hash | issued_at). It is about who, which tie and when,
 not only the content. v0 receipts are checked by the authority (`POST /verify`).
 

@@ -12,11 +12,12 @@ FN=ties-api; REGION=us-east-1; LIVE=https://tiesapi.com; DRY=0
 [ "${1:-}" = --dry-run ] && DRY=1
 for t in zip aws curl jq shasum; do command -v "$t" >/dev/null || { echo "publish: needs $t" >&2; exit 2; }; done
 
+B="$(mktemp -d)"
 echo "== 1 test"
-./test.sh | tail -1 | grep -q ' 0 failed' || { echo "publish: test.sh failed, nothing sent" >&2; exit 1; }
+./test.sh > "$B/test.txt" 2>&1; tail -1 "$B/test.txt"
+grep -q ' 0 failed' "$B/test.txt" || { grep FAIL "$B/test.txt"; echo "publish: test.sh failed, nothing sent" >&2; exit 1; }
 
 echo "== 2 bundle"
-B="$(mktemp -d)"
 cp endpoint/lambda_function.py "$B/"
 mkdir -p "$B/catalog/entries"; cp catalog/keywords.tsv "$B/catalog/"
 for f in catalog/entries/*; do [ -f "$f" ] && cp "$f" "$B/catalog/entries/"; done

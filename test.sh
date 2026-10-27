@@ -4,7 +4,7 @@ set -u; cd "$(dirname "$0")"; pass=0; fail=0
 ok() { echo "ok   $1"; pass=$((pass+1)); }; bad() { echo "FAIL $1"; fail=$((fail+1)); }
 T="$(mktemp -d)"; S="$T/ties.jsonl"; X=bin/ties; PORT=${PORT:-8799}
 export TIES_KEY="$(openssl rand -hex 32)"
-(cd endpoint && exec python3 serve_local.py $PORT) & EP=$!; trap 'kill $EP 2>/dev/null; rm -rf "$T"' EXIT
+(cd endpoint && exec python3 serve_local.py $PORT) >/dev/null 2>&1 & EP=$!; trap 'kill $EP 2>/dev/null; rm -rf "$T"' EXIT
 for i in $(seq 1 20); do curl -s -o /dev/null --max-time 1 "http://127.0.0.1:$PORT/" && break; sleep 0.3; done
 
 # US-1 register
@@ -36,10 +36,26 @@ $X export --public --store "$S" --out "$T/public.jsonl" 2>/dev/null
 # US-7 receipt
 TH="$($X context "$P" --store "$S" | head -1 | cut -f1)"; TL="$(jq -r --argjson n "$TH" 'select(.n==$n) | .hash' "$S")"
 R="$($X receipt "$TL" --endpoint "http://127.0.0.1:$PORT" --store "$S")"
-V="$(printf '%s' "$R" | jq -c --arg f "$FID" '{federated_id:$f, tie_hash, issued_at, receipt}' | curl -s -d @- "http://127.0.0.1:$PORT/verify" | jq -r .valid)"
+V="$(printf '%s' "$R" | jq -c --arg f "$FID" '{federated_id:$f, hash, issued_at, receipt}' | curl -s -d @- "http://127.0.0.1:$PORT/verify" | jq -r .valid)"
 [ "$V" = true ] && ok "US-7 receipt issued and verified ($(printf '%s' "$R" | jq -r .receipt | cut -c1-12)…), nothing stored" || bad "US-7 receipt"
 TAMP="$(jq -c --argjson n "$TH" 'select(.n==$n) | .field="changed"' "$S")"
 [ "$(jq -cn --arg f "$FID" --arg l "$TAMP" '{federated_id:$f, line:$l}' | curl -s -d @- "http://127.0.0.1:$PORT/receipt" | jq .status)" = 400 ] && ok "US-7 a changed tie is refused" || bad "US-7 tamper"
+# US-8 SOP-001, the canonical register: registration on line 1, a labeled entry with a parent, a receipt that binds label + inside + time
+C="$T/register.jsonl"; CAT=https://tiesapi.com/catalog; EP="http://127.0.0.1:$PORT"
+printf 'Test Operator, test@example.org, iPhone, Example University, lab manager, annual review\n' > "$T/reg.txt"; RI="$($X hash "$T/reg.txt")"
+H1="$($X enter "$CAT/registration" "$RI" --memo registered --store "$C")"
+echo "step 3: pick the label, fetch it, check its hash" > "$T/s1.txt"; S1="$($X hash "$T/s1.txt")"
+H2="$($X enter "$CAT/sop-001" "$S1" --parent "$H1" --memo "SOP-001 step 3" --by both --store "$C")"
+FID2="$($X id --store "$C")"
+echo "$FID2" | grep -Eq '^theisen-api:[0-9a-f]{16}$' && $X verify --store "$C" >/dev/null && [ "$($X lines --store "$C" | wc -l | tr -d ' ')" = 2 ] && ok "US-8 canonical register: registration on line 1, a labeled entry with a parent, chain verifies ($FID2)" || bad "US-8 register"
+R2="$($X receipt "$H2" --endpoint "$EP" --store "$C")"
+LS="sha256:$(shasum -a 256 catalog/entries/sop-001 | cut -c1-64)"
+[ "$(printf '%s' "$R2" | jq -r .label_sha256)" = "$LS" ] && [ "$(printf '%s' "$R2" | jq -r .inside)" = "$S1" ] && [ "$(printf '%s' "$R2" | jq -r .label)" = "$CAT/sop-001" ] && ok "US-8 receipt binds the label (and the catalog's sha256 of it), the inside and the time" || bad "US-8 receipt: $R2"
+V2="$(printf '%s' "$R2" | jq -c --arg f "$FID2" '{federated_id:$f, hash, issued_at, receipt}' | curl -s -d @- "$EP/verify" | jq -r .valid)"; [ "$V2" = true ] && ok "US-8 receipt verifies" || bad "US-8 verify"
+C2="$T/r2.jsonl"; $X enter "$CAT/registration" "$RI" --store "$C2" >/dev/null; H3="$($X enter "$CAT/not-a-label" "$S1" --store "$C2")"
+E3="$(jq -cn --arg f "$($X id --store "$C2")" --arg l "$(jq -c --arg h "$H3" 'select(.hash==$h)' "$C2")" '{federated_id:$f, line:$l}' | curl -s -d @- "$EP/receipt" | jq -r .error)"
+[ "$E3" = "label is not in the catalog" ] && ok "US-8 a label not in the catalog gets no receipt" || bad "US-8 label guard: $E3"
+$X enter "$CAT/sop-001" "$S1" --store "$T/r3.jsonl" 2>/dev/null; [ $? -eq 2 ] && ok "US-8 line 1 must be the registration" || bad "US-8 line 1 guard"
 # guards
 $X add "$FID" "bad word" "$P" --store "$S" 2>/dev/null; [ $? -eq 2 ] && ok "a keyword with a space is refused" || bad "keyword guard"
 $X add "not an address" opens "$P" --store "$S" 2>/dev/null; [ $? -eq 2 ] && ok "a from that is not an address is refused" || bad "address guard"

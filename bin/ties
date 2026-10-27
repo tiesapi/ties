@@ -13,23 +13,35 @@
 #         ties export [--public] [--out <file>]           US-6 the chain; --public: only public ties, memos kept, attrs dropped
 #         ties verify [--lines]                           the chain intact; --lines: each line's own hash only (public exports)
 #         ties show                                       the ties, one per line
-#         ties receipt <tie hash> [--endpoint <url>]       US-7 receipt from tiesapi.com, kept in <store>.receipts (the chain is not changed)
+#         ties receipt <hash> [--endpoint <url>]           US-7 receipt from tiesapi.com for the line with that hash, kept in <store>.receipts
+#
+#   SOP-001, the canonical register (one file, one JSON line per entry; line 1 is the registration):
+#         ties enter <label> <inside> [--parent <hash>]... [--memo <text>] [--by human|agent|both]
+#                                                         append one line. label = https://tiesapi.com/catalog/<entry>; inside = sha256 of
+#                                                         your content (ties hash <file>); line 1: label .../catalog/registration, and the
+#                                                         federated id is derived from its inside. Then: ties receipt <hash>
+#         ties lines                                      the register: n, by, label, inside, memo
 #   every command takes [--store <file>] (default ./ties.jsonl) and [--catalog <file>] (default catalog/keywords.tsv beside bin/)
 # exit  : 0 ok | 1 verify failed | 2 invalid call
 set -uo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"; OR="$HERE/operator-register"
 CMD="${1:-}"; shift 2>/dev/null
-ENDPOINT="${TIES_ENDPOINT:-https://tiesapi.com}"; STORE="./ties.jsonl"; CATALOG="$HERE/../catalog/keywords.tsv"; MEMO=""; VIS="private"; OUT=""; PUBLIC=0; LINES=0; POS=(); ATTRS=()
+ENDPOINT="${TIES_ENDPOINT:-https://tiesapi.com}"; LABELS="https://tiesapi.com/catalog"; STORE="./ties.jsonl"; CATALOG="$HERE/../catalog/keywords.tsv"
+MEMO=""; VIS="private"; OUT=""; PUBLIC=0; LINES=0; BY="human"; POS=(); ATTRS=(); PARENTS=()
 while [ $# -gt 0 ]; do
   case "$1" in
     --store) STORE="$2"; shift 2;; --catalog) CATALOG="$2"; shift 2;; --memo) MEMO="$2"; shift 2;;
     --public) VIS="public"; PUBLIC=1; shift;; --attr) ATTRS+=("$2"); shift 2;; --out) OUT="$2"; shift 2;;
-    --lines) LINES=1; shift;; --endpoint) ENDPOINT="$2"; shift 2;; *) POS+=("$1"); shift;;
+    --lines) LINES=1; shift;; --endpoint) ENDPOINT="$2"; shift 2;; --parent) PARENTS+=("$2"); shift 2;; --by) BY="$2"; shift 2;; *) POS+=("$1"); shift;;
   esac
 done
 die() { echo "ties: $1" >&2; exit 2; }
 sha() { shasum -a 256 | cut -c1-64; }
-fid() { [ -s "$STORE" ] || die "no chain at $STORE; run: ties register"; printf 'theisen-api:%s' "$(printf 'theisen-api|%s' "$(head -1 "$STORE" | jq -r .hash)" | sha | cut -c1-16)"; }
+fid() { [ -s "$STORE" ] || die "no chain at $STORE; run: ties register (or ties enter .../catalog/registration <inside>)"
+  local w; w="$(head -1 "$STORE" | jq -r '.who // empty')"
+  case "$w" in theisen-api:*) printf '%s' "$w"; return;; esac   # a canonical register: who is on line 1
+  printf 'theisen-api:%s' "$(printf 'theisen-api|%s' "$(head -1 "$STORE" | jq -r .hash)" | sha | cut -c1-16)"; }
+canon() { head -1 "$STORE" 2>/dev/null | jq -e '.label' >/dev/null 2>&1; }   # is the store a canonical register?
 addr_ok() { printf '%s' "$1" | grep -Eq '^(sha256:[0-9a-f]{64}|theisen-api:[0-9a-f]{16}|[a-z][a-z0-9+.-]*:[^[:space:]]+)$'; }
 keyword_ok() {
   printf '%s' "$1" | grep -Eq '^[A-Za-z][A-Za-z0-9_.-]*$' || return 1
@@ -68,17 +80,42 @@ case "$CMD" in
       [ $skipped -gt 0 ] && echo "ties: $skipped public tie(s) with attrs left out (attrs are inside the hash)" >&2
     else R="$(cat "$STORE")"; fi
     if [ -n "$OUT" ]; then printf '%s\n' "$R" | grep . > "$OUT"; echo "ties: wrote $OUT" >&2; else printf '%s\n' "$R" | grep .; fi;;
+  enter)
+    [ ${#POS[@]} -eq 2 ] || die "usage: ties enter <label> <inside> [--parent <hash>]... [--memo <text>] [--by human|agent|both]"
+    L="${POS[0]}"; I="${POS[1]}"
+    case "$L" in "$LABELS/"?*) ;; *) die "label must be a catalog URL: $LABELS/<entry>";; esac
+    printf '%s' "$I" | grep -Eq '^sha256:[0-9a-f]{64}$' || die "inside must be sha256:<64 hex> (ties hash <file>)"
+    case "$BY" in human|agent|both) ;; *) die "by must be human, agent or both";; esac
+    for p in "${PARENTS[@]+"${PARENTS[@]}"}"; do printf '%s' "$p" | grep -Eq '^sha256:[0-9a-f]{64}$' || die "parent is not sha256:<64 hex>: $p"; done
+    if [ -s "$STORE" ]; then canon || die "$STORE is not a canonical register (use a new --store)"
+      n=$(( $(wc -l < "$STORE" | tr -d ' ') + 1 )); prev="\"$(tail -1 "$STORE" | jq -r .hash)\""; WHO="$(fid)"
+    else [ "$L" = "$LABELS/registration" ] || die "line 1 is the registration: ties enter $LABELS/registration <sha256 of your registration block>"
+      n=1; prev=null; WHO="theisen-api:$(printf 'theisen-api|%s' "$I" | sha | cut -c1-16)"; fi
+    P="$(printf '%s\n' "${PARENTS[@]+"${PARENTS[@]}"}" | grep . | jq -R . | jq -cs .)"
+    body="$(jq -cn --argjson n "$n" --arg when "$(date "+%Y-%m-%dT%H:%M:%S%z")" --arg who "$WHO" --arg label "$L" --arg inside "$I" \
+      --argjson parents "$P" --arg memo "$MEMO" --arg by "$BY" --argjson prev "$prev" \
+      '{n:$n,when:$when,who:$who,label:$label,inside:$inside,parents:$parents,memo:$memo,by:$by,prev:$prev}')"
+    h="$(printf '%s' "$body" | sha)"; printf '%s' "$body" | jq -c --arg h "sha256:$h" '. + {hash:$h}' >> "$STORE"; echo "sha256:$h";;
+  lines) jq -r 'select(.label) | "\(.n)\t\(.by)\t\(.label)\t\(.inside)\t\(.memo)"' "$STORE";;
   verify)
-    if [ $LINES -eq 1 ]; then bad=0; i=0
+    if canon; then prev=null; i=0; bad=0
+      while IFS= read -r line; do i=$((i+1))
+        h="$(printf '%s' "$line" | jq -c 'del(.hash)' | tr -d '\n' | sha)"
+        [ "sha256:$h" = "$(printf '%s' "$line" | jq -r .hash)" ] || { echo "FAIL line $i: hash does not recompute"; bad=1; }
+        [ "$prev" = "$(printf '%s' "$line" | jq -r .prev)" ] || { echo "FAIL line $i: prev does not match line $((i-1))"; bad=1; }
+        [ "$(printf '%s' "$line" | jq -r .n)" = "$i" ] || { echo "FAIL line $i: n is not $i"; bad=1; }
+        prev="$(printf '%s' "$line" | jq -r .hash)"; done < "$STORE"
+      [ $bad -eq 0 ] && echo "ok   $i lines, chain intact, tip $prev"; exit $bad
+    elif [ $LINES -eq 1 ]; then bad=0; i=0
       while IFS= read -r line; do h="$(printf '%s' "$line" | jq -c 'del(.hash)' | tr -d '\n' | sha)"
         [ "sha256:$h" = "$(printf '%s' "$line" | jq -r .hash)" ] || { echo "FAIL line $i"; bad=1; }; i=$((i+1)); done < "$STORE"
       [ $bad -eq 0 ] && echo "ok   $i lines, each hash recomputes"; exit $bad
     else "$OR" verify --store "$STORE"; fi;;
-  receipt) [ -n "${POS[0]:-}" ] || die "usage: ties receipt <tie hash>"
+  receipt) [ -n "${POS[0]:-}" ] || die "usage: ties receipt <hash>"
     L="$(jq -c --arg h "${POS[0]}" 'select(.hash==$h)' "$STORE")"; [ -n "$L" ] || die "no line with hash ${POS[0]}"
     R="$(jq -cn --arg f "$(fid)" --arg l "$L" '{federated_id:$f, line:$l}' | curl -s --max-time 15 -H 'Content-Type: application/json' -d @- "$ENDPOINT/receipt")"
     [ "$(printf '%s' "$R" | jq -r .status 2>/dev/null)" = 201 ] || { echo "ties: no receipt: $R" >&2; exit 1; }
-    printf '%s' "$R" | jq -c 'del(.status)' >> "$STORE.receipts"; printf '%s' "$R" | jq -c '{receipt, issued_at, tie_hash}';;
+    printf '%s' "$R" | jq -c 'del(.status)' >> "$STORE.receipts"; printf '%s' "$R" | jq -c 'del(.status, .authority, .contact, .attests)';;
   show) ties_jq | jq -r '"\(.n)\t\(.tie.from)\t\(.field)\t\(.tie.to)\t\(.tie.visibility)\t\(.tie.memo)"';;
-  *) sed -n 2,23p "$0"; exit 2;;
+  *) sed -n '2,/^# exit/p' "$0"; exit 2;;
 esac

@@ -8,7 +8,7 @@ from this operator, at this time, with a public memo.
 - The catalog: [catalog/entries/](catalog/entries/), one file per label; the file name is the URL, https://tiesapi.com/catalog/<name>
 - The first SOP: [catalog/entries/sop-001](catalog/entries/sop-001) (register, label, keep; the three powers; the canonical register; the five calls)
 - Spec and user stories: [SPEC.md](SPEC.md)
-- On your device: `bin/ties` (register, add, context, sop, export, verify, receipt)
+- On your device: `bin/ties` (enter, lines, receipt, verify for the canonical register; register, add, context, sop, export for v0 ties)
 - Receipts: https://tiesapi.com (stores nothing)
 - Check it yourself: `./test.sh` runs one check per user story, then the site checks
 - Publish: `bin/publish` tests, bundles the endpoint and the catalog, sends them to tiesapi.com, and compares every entry's sha256 from the outside
