@@ -1,0 +1,20 @@
+# session-report-lut — catalog entry
+
+Path: /Users/doctortheisen/worldline/catalog/session-report-lut/
+
+| Field | Value |
+|---|---|
+| Id | session-report-lut/0.1 |
+| Title | Operational Session Report — Lookup-Table (LUT) / Lookbook Style |
+| Kind | abstract SOP (generic type, not an instance) |
+| Description | Compose the end-of-session report as a lookup table: one row per request; each row = request quoted byte-exact with receipt (identity TIE) → abstract-level summary → claims (y/n, confidence decimal, receipt); open items last. The seven checklist steps are mdc/0.1 Merkle DAG nodes, verified by identity, not report content. |
+| Steps | archive → request → tie, summary, claim, open → assemble |
+| Repository | https://github.com/doctortheisen/session-report-lut (private, archived) @ 73613966f2be6559d237ae038174625dbc1ea60e |
+| Content address | mdc/0.1 root e270b47b53c21b5266e9a2824e0f5ff6421beaee1caac96924f3b5054ff5f234 (chain head eacbeff14b0a463a86f2625112faf4628729a942f935d51495ac32f1512beafb) |
+| Built in | /Users/doctortheisen/worldline/days/20261003/sandbox/T183341PDT (files at contents/session-report-lut/) |
+| Onboarding | USAGE.md in the repository |
+| Exemplar | https://github.com/doctortheisen/merkle-dag-chain |
+
+Verify: clone the repository, run `./test.sh` (ALL PASS), or
+`mdc verify . chain/mdc.jsonl --graph chain/graph.json --config chain/config.json`.
+The definition lives in the repository; this entry indexes it (no copy).

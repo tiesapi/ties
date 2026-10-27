@@ -12,4 +12,13 @@ from this operator, at this time, with a public memo.
 - Check it yourself: `./test.sh` runs one check per user story, then the site checks
 - Publish: `bin/publish` tests, bundles the endpoint and the catalog, sends them to tiesapi.com, and compares every entry's sha256 from the outside
 
+## The workflow: put a page on tiesapi.com
+
+1. Write the file. One file = one entry = one URL. Put it at `catalog/entries/<name>`; the exact bytes are what the site shows and hashes.
+2. Run `bin/publish`. It runs the checks, bundles, sends, then fetches every entry back from https://tiesapi.com and compares the sha256.
+3. Open https://tiesapi.com/catalog/<name>. A browser sees the page; `curl` sees the bytes and the sha256 as JSON.
+
+To change an entry, change the file and publish again; the hash changes with it. To take one down, remove the file and publish.
+The same three steps, with a button, are on the local catalog page (`~/Developer/tiesapi/cms`, port 8800).
+
 Authority: theisen-api, Dr. Theisen · https://doctortheisen.com/ · Problem? doctortheisen@gmail.com

@@ -1,0 +1,18 @@
+# sop-nonce-chain — catalog entry
+
+Path: /Users/doctortheisen/worldline/catalog/sop-nonce-chain/
+
+| Field | Value |
+|---|---|
+| Id | sop-nonce-chain/0.1 |
+| Title | SOP with N sequenced nonces — Lamport one-way hash chain, gated by criterion and token |
+| Kind | abstract SOP type (generic, not an instance): a definition with its terms and sources |
+| Description | An SOP of N steps whose initialisation yields N nonces bound to that instance (`x_i = H^i(s)`, anchor `x_N` public). Step k presents `x_(N-(k+1))`; accepted iff it hashes to the last accepted element. Cannot skip, cannot reorder, nonces invalid outside the instance; credit at each step requires the nonce and the performance criterion (`r_k = H(x_step ‖ result_k)`). Companion term for a fixed procedure over random contents: parametricity. |
+| Steps | init (seed, anchor) → step k: present `x_(N-(k+1))` + criterion → verify `H(x) == last_accepted` → receipt → … → close (receipt `H(x_0 ‖ head)`) |
+| Repository | none yet; the definition is the file below |
+| Content address | sha256 a3987d5b99a5ea48cf87923b4a50f6c64e6210df6580c73a99d1bd0d7aedb961 (the definition file at 2026-10-14 08:26 PDT) |
+| Built in | /Users/doctortheisen/worldline/days/20261014/T053443PDT (file at sandbox/contents/sop-nonce-chain/README.md; register open at the time of this entry) |
+| Origin | doctortheisen's questions of 08:07 and 08:20 PDT 2026-10-14, quoted verbatim in the definition |
+| Exemplar | https://github.com/doctortheisen/merkle-dag-chain (hash-chained register the design note maps onto) |
+
+The definition lives in the sandbox file; this entry indexes it (no copy).

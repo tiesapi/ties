@@ -1,0 +1,22 @@
+# onboarding-sop — catalog entry
+
+Path: /Users/doctortheisen/worldline/catalog/onboarding-sop/
+
+| Field | Value |
+|---|---|
+| Id | onboarding-sop/0.1 |
+| Title | Onboarding to the worldline sandbox system — component module |
+| Kind | abstract SOP component (generic type, not an instance); included by a ticket README.md by one line instead of mixing onboarding text into the ticket |
+| Description | The minimum a qualified operator does to open a sandbox (`tsb`), open its GitHub counterpart, work in contents/ behind a test gate, close and archive (`csb`, SOP-WLD-001), index the day, and hand off — as seven sequential propositions (y/n · cl · memo), each falsifiable by a command whose output is cited; a falsified proposition interrupts the workflow. |
+| Steps | orient → open → counterpart → work → close → index → handoff |
+| Repository | https://github.com/doctortheisen/onboarding-sop (private, archived) @ 011163cc8c20894da4f89b14bec29896aa1450b6 |
+| Content address | mdc/0.1 root d479fa81d110da74528bde8aca7203d0b80fd80e1b95d4e88cba68318c4d69d0 (chain head f3fe375f0e62f90a0a12cd5e1e6ae957bf07585ffb664ea4ae7f4927ac840e05) |
+| Built in | /Users/doctortheisen/worldline/days/20261005/sandbox/T022733PDT (files at contents/onboarding-sop/) |
+| Demonstration | /Users/doctortheisen/worldline/days/20261005/sandbox/T022733PDT/contents/ONBOARDING_LOG.md (the course taken once, with cited outputs) → sandbox /Users/doctortheisen/worldline/days/20261005/sandbox/T042822PDT |
+| Onboarding | README.md in the repository ("How a ticket uses it") |
+| Exemplar | https://github.com/doctortheisen/session-report-lut |
+
+Verify: clone the repository, run `./test.sh` (ALL PASS), or `mdc verify . chain/mdc.jsonl --config chain/config.json`.
+The definition lives in the repository; this entry indexes it (no copy).
+
+Note 2026-10-17: the `index` step (day index, SOP-WLD-001 phase 6) is retired; `close` runs phases 1–5 by hand since `csb` was deprecated 2026-10-05. The definition in its repository is unchanged.
