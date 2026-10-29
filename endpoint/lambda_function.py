@@ -189,8 +189,8 @@ On a device: bin/ties enter <label> <inside> writes a line; bin/ties receipt <ha
 checks the chain.
 
 ## Logging
-Where: CloudWatch Logs, log group /aws/lambda/ties-api, region us-east-1. Retention: as set on the log group (none set as of
-2026-10-28: kept until deleted).
+Where: CloudWatch Logs, log group /aws/lambda/ties-api, region us-east-1. Retention: 365 days (set 2026-10-28); CloudWatch
+deletes older lines.
 One JSON line per request:
   log         "ties-request"
   request_id  the X-Request-Id of the reply
