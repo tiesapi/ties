@@ -1,0 +1,27 @@
+# POST /sop/check: an SOP and the lines of one run in; every step in order, or the first that fails, out
+route     POST /sop/check
+handler   sop_check
+memo      the contract of POST /sop/check on tiesapi.com
+input
+  {"federated_id", "sop": "<the SOP text>", "lines": ["<step 0 line>", "<step 1 line>", ...], "receipts": [{issued_at, receipt}, ...]}
+  the SOP's steps are its lines "<k> sha256:<64 hex>", k = 1..N; receipts are optional, one per line, from POST /receipt
+processing
+  1 the body is one JSON object of at most 65,536 characters, and federated_id has its form
+  2 the SOP's id is the sha256 of its exact text; read steps 1..N
+  3 each line passes every rule of POST /receipt
+  4 line k is step k: label = step k of the SOP (step 0: the SOP itself), parents include line k-1,
+    prev_nonce = the nonce of line k-1, and sha256 of the nonce = prev_nonce
+  5 with receipts: each verifies, and issued_at never goes backwards
+output
+  200 {valid, complete, sop, steps, done, timed, error}: valid only when steps 0..N are all there, in order
+  400 only for a malformed body or federated_id; a run that fails is 200 with valid: false and the first failure in error
+  check: skip, repeat or reorder one step and valid is false
+graph
+  builds on receipt
+  builds on verify
+example
+  POST /receipt {"federated_id": "theisen-api:d030e7551d91b584", "line": "{\"n\":2,\"who\":\"theisen-api:d030e7551d91b584\",\"label\":\"https://tiesapi.com/catalog/sha256:a79da79624b541e7d7cd0ec44a56b2790fa2b83a3a422ce0b4247fc2fab22b70\",\"inside\":\"sha256:a79da79624b541e7d7cd0ec44a56b2790fa2b83a3a422ce0b4247fc2fab22b70\",\"parents\":[\"sha256:b984cebaf1ab8f2b29004acf928d9b5e7d48bf6ed84d93c29a1ac30cf84dfae2\"],\"memo\":\"example: open the run\",\"by\":\"agent\",\"sop\":\"sha256:a79da79624b541e7d7cd0ec44a56b2790fa2b83a3a422ce0b4247fc2fab22b70\",\"step\":0,\"nonce\":\"803e12bac2a01448d81e5985d03f1435919d1a9736fd022a3df45cf83e7dc5ee\",\"prev\":\"sha256:b984cebaf1ab8f2b29004acf928d9b5e7d48bf6ed84d93c29a1ac30cf84dfae2\",\"hash\":\"sha256:081ab03bf244794af741c5d47257e72f8e3b0c0ce62fe0ba4c2782f40434680f\"}"}
+  POST /receipt {"federated_id": "theisen-api:d030e7551d91b584", "line": "{\"n\":3,\"who\":\"theisen-api:d030e7551d91b584\",\"label\":\"https://tiesapi.com/catalog/sha256:d88a5318c032335902db7e50d608e35a49a1d15922bdaafdb01f79e45b4b910c\",\"inside\":\"sha256:697f3cbc9de9cbf6431c68d6b248e7904d0daccc1ae6fb7b691efacc85839049\",\"parents\":[\"sha256:081ab03bf244794af741c5d47257e72f8e3b0c0ce62fe0ba4c2782f40434680f\"],\"memo\":\"example: step 1\",\"by\":\"agent\",\"sop\":\"sha256:a79da79624b541e7d7cd0ec44a56b2790fa2b83a3a422ce0b4247fc2fab22b70\",\"step\":1,\"nonce\":\"504ebf63e4d1774f971bd1ee5b9279b68a70f776d5d0d5080a358f7b70e26537\",\"prev_nonce\":\"803e12bac2a01448d81e5985d03f1435919d1a9736fd022a3df45cf83e7dc5ee\",\"prev\":\"sha256:081ab03bf244794af741c5d47257e72f8e3b0c0ce62fe0ba4c2782f40434680f\",\"hash\":\"sha256:87c8f3c0b1ab22cc6482cc1c77f6e8ea06052bdb28e075321e09dc16a5637cea\"}"}
+  POST /sop/check {"federated_id": "theisen-api:d030e7551d91b584", "sop": "# SOP: example, one step\n1 sha256:d88a5318c032335902db7e50d608e35a49a1d15922bdaafdb01f79e45b4b910c\n", "lines": ["{\"n\":2,\"who\":\"theisen-api:d030e7551d91b584\",\"label\":\"https://tiesapi.com/catalog/sha256:a79da79624b541e7d7cd0ec44a56b2790fa2b83a3a422ce0b4247fc2fab22b70\",\"inside\":\"sha256:a79da79624b541e7d7cd0ec44a56b2790fa2b83a3a422ce0b4247fc2fab22b70\",\"parents\":[\"sha256:b984cebaf1ab8f2b29004acf928d9b5e7d48bf6ed84d93c29a1ac30cf84dfae2\"],\"memo\":\"example: open the run\",\"by\":\"agent\",\"sop\":\"sha256:a79da79624b541e7d7cd0ec44a56b2790fa2b83a3a422ce0b4247fc2fab22b70\",\"step\":0,\"nonce\":\"803e12bac2a01448d81e5985d03f1435919d1a9736fd022a3df45cf83e7dc5ee\",\"prev\":\"sha256:b984cebaf1ab8f2b29004acf928d9b5e7d48bf6ed84d93c29a1ac30cf84dfae2\",\"hash\":\"sha256:081ab03bf244794af741c5d47257e72f8e3b0c0ce62fe0ba4c2782f40434680f\"}", "{\"n\":3,\"who\":\"theisen-api:d030e7551d91b584\",\"label\":\"https://tiesapi.com/catalog/sha256:d88a5318c032335902db7e50d608e35a49a1d15922bdaafdb01f79e45b4b910c\",\"inside\":\"sha256:697f3cbc9de9cbf6431c68d6b248e7904d0daccc1ae6fb7b691efacc85839049\",\"parents\":[\"sha256:081ab03bf244794af741c5d47257e72f8e3b0c0ce62fe0ba4c2782f40434680f\"],\"memo\":\"example: step 1\",\"by\":\"agent\",\"sop\":\"sha256:a79da79624b541e7d7cd0ec44a56b2790fa2b83a3a422ce0b4247fc2fab22b70\",\"step\":1,\"nonce\":\"504ebf63e4d1774f971bd1ee5b9279b68a70f776d5d0d5080a358f7b70e26537\",\"prev_nonce\":\"803e12bac2a01448d81e5985d03f1435919d1a9736fd022a3df45cf83e7dc5ee\",\"prev\":\"sha256:081ab03bf244794af741c5d47257e72f8e3b0c0ce62fe0ba4c2782f40434680f\",\"hash\":\"sha256:87c8f3c0b1ab22cc6482cc1c77f6e8ea06052bdb28e075321e09dc16a5637cea\"}"], "receipts": [{"issued_at": "{{1.issued_at}}", "receipt": "{{1.receipt}}"}, {"issued_at": "{{2.issued_at}}", "receipt": "{{2.receipt}}"}]}
+versions
+  sha256:eb8bb2f00ba874278dac5c7c19650cf3473152475ec42185da5bd2d46286ddc8 first version

@@ -12,9 +12,12 @@ A browser (Accept: text/html) gets a page. Anything else (curl, an agent) gets J
   POST /verify        {"federated_id", "hash", "issued_at", "receipt", "label_sha256" (entry receipts)} -> {"valid": true|false}
   POST /sop/check     {"federated_id", "sop", "lines", "receipts"} -> {"valid", "complete", "steps", "done", "timed", "error"}
   GET  /docs          the API reference (DOCS below), byte-exact with its sha256
+  GET  /api           the contracts: one page per route, in one form (catalog/contracts/<name>, one file each)
+  GET  /api/<c>       one contract: input, processing, output, graph (its base-then-append chain), an example run on the view
   GET  /robots.txt, /favicon.ico. HEAD answers like GET, without the body.
 
 The catalog is read from catalog/ beside this file (the published bundle) or ../catalog (the repository).
+The contracts are read from catalog/contracts/ (or TIES_CONTRACTS); bin/publish does not bundle them today.
 receipt = HMAC-SHA256(TIES_KEY, "ties-receipt-v1" | federated_id | hash | issued_at | label_sha256), hex, for an entry line
 (hash already covers label and inside); "ties-receipt-v0" | federated_id | hash | issued_at for a v0 tie line.
 Every JSON reply carries "status" in the body as well as the HTTP status. Every reply carries X-Request-Id, and every request
@@ -65,6 +68,7 @@ CODE = "sha256:" + hashlib.sha256(open(os.path.abspath(__file__), "rb").read()).
 CATALOG = next((p for p in (os.environ.get("TIES_CATALOG", ""), os.path.join(HERE, "catalog"), os.path.join(HERE, "..", "catalog"))
                 if p and os.path.isdir(p)), os.path.join(HERE, "catalog"))
 OBJECTS = os.environ.get("TIES_OBJECTS") or os.path.join(CATALOG, "objects")   # objects/<64 hex>: bytes named by their sha256
+CONTRACTS = os.environ.get("TIES_CONTRACTS") or os.path.join(CATALOG, "contracts")   # contracts/<name>: one file per route
 HEX = re.compile(r"^[0-9a-f]{64}\Z")
 PARTS = ("input", "processing", "output", "graph")                              # the parts of a page (names: his word)
 STEP = re.compile(r"[ \t]*([0-9]{1,6})[ \t]+(?:https://tiesapi\.com/catalog/)?sha256:([0-9a-f]{64})[ \t]*")
@@ -79,9 +83,11 @@ GET  /catalog/sha256:<hex>
 POST /receipt           an entry line -> a timestamped receipt; stores nothing
 POST /verify            a receipt -> valid or not
 POST /sop/check         an SOP and the lines of one run -> every step in order, or the first step that fails
-GET  /docs              the API reference: every call, its fields and errors, and what is logged"""
+GET  /docs              the API reference: every call, its fields and errors, and what is logged
+GET  /api               the contracts: one page per route, in one form
+GET  /api/<contract>    one contract: input, processing, output, graph, and a worked example"""
 ROUTES = ["GET /docs", "GET /catalog", "GET /catalog/<entry>", "GET /catalog/sha256:<hex>", "POST /receipt", "POST /verify",
-          "POST /sop/check"]
+          "POST /sop/check", "GET /api", "GET /api/<contract>"]
 DOCS = r"""# TIES API reference
 
 https://tiesapi.com · this text is served byte-exact at https://tiesapi.com/docs with its sha256 · source https://github.com/tiesapi/ties
@@ -108,6 +114,9 @@ GET  /catalog/sha256:<hex>    one object by content address: {id, url, sha256, b
 POST /receipt                 {federated_id, line} -> 201 {receipt, issued_at, hash, label, label_sha256, inside, ...}
 POST /verify                  {federated_id, hash, issued_at, receipt, label_sha256} -> 200 {valid}
 POST /sop/check               {federated_id, sop, lines, receipts} -> 200 {valid, complete, steps, done, timed, error}
+GET  /api                     the contracts, one page per route: {form, handlers, contracts: [{name, url, route, title, head,
+                              current}]}
+GET  /api/<contract>          one contract page: {route, input, processing, output, graph, example, ...}; 404 if there is none
 GET  /robots.txt, GET /favicon.ico
 
 ## The register line (SOP-001, https://tiesapi.com/catalog/sop-001)
@@ -178,6 +187,16 @@ Reply 200: valid; error (the first failure, in words) when valid is false. Once 
 valid is true only when steps 0..N are all there, in order, each bound to the one before; with receipts, each receipt
 verifies and issued_at never goes backwards. issued_at counts whole seconds, so a run submitted within one second passes.
 The reply is 200 even when valid is false; 400 only for a missing or malformed federated_id or body.
+
+## Contracts: one page per route (https://tiesapi.com/api)
+GET / and every route it lists has a contract: one file, catalog/contracts/<name>, in one form: input, processing, output,
+graph, example, versions. https://tiesapi.com/api/<name> shows it: the parts, the example requests with the replies the
+code gives on that view, and the graph: the base (sha256 of the page URL and the memo; no content yet), then one version
+per line under versions (sha256 of the content, the memo, the hash of the link before), append only, and the contracts it
+builds on and is built on by, each by URL and head hash. GET /api gives the form in full and the handlers a contract can name.
+Add a contract: write one file; the router reads it. A route that is built in answers even when no contract file is here.
+The pages are served only where catalog/contracts/ is in the bundle; where it is not, GET /api lists no contracts and
+GET /api/<name> is 404, while every built-in route still answers.
 
 ## Examples
   curl https://tiesapi.com/
@@ -317,7 +336,7 @@ def _page(status, title, body):
     h = html.escape
     doc = (f'<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">'
            f'<title>{h(title)}</title><link rel="icon" href="/favicon.ico" type="image/svg+xml"><style>{STYLE}</style></head><body>'
-           f'<p class="dim"><a href="/">tiesapi.com</a> · <a href="/catalog">catalog</a> · <a href="/docs">docs</a></p>'
+           f'<p class="dim"><a href="/">tiesapi.com</a> · <a href="/catalog">catalog</a> · <a href="/api">api</a> · <a href="/docs">docs</a></p>'
            f'{body}'
            f'<p class="dim">Dr. Theisen · <a href="mailto:{CONTACT}">{CONTACT}</a></p></body></html>\n')
     return _raw(status, "text/html; charset=utf-8", doc)
@@ -375,6 +394,282 @@ def _docs():
 
 def _not_found_html(path):
     return _page(404, "TIES · not found", f"<h1>not found</h1><p class=\"dim\">{html.escape(path)}</p><p><a href=\"/\">tiesapi.com</a></p>")
+
+
+# ---- contracts: one route = one contract = one file = one page, in one form ---------------------------------------
+# The names (contracts/, /api, route, handler, memo, builds on, example, versions) are his word.
+
+FORM = """One route = one contract = one file, catalog/contracts/<name>, and one page, https://tiesapi.com/api/<name>.
+The file, in this form (the API reads it; it knows nothing of any page's subject):
+
+# <METHOD> <path>: <title, one line>
+route     GET /path  or  POST /path  (a path may end in <name>: the rest of the path)
+handler   the general operation that answers the route: one of the handlers listed with this form
+memo      the public memo of the base; fixed once written: the base and every version hash it
+input
+  what the route takes
+processing
+  the steps, in order
+output
+  what comes out, and how a person checks it
+graph
+  builds on <name>        one line for each contract this one builds on
+example
+  GET /path               requests the code runs on every view of the page; a POST has its JSON body on the
+  POST /path {...}        same line; {{1.receipt}} is the field receipt of reply 1
+versions
+  sha256:<64 hex> <memo>  append only: one line per version of everything above the line "versions"
+
+The page shows input, processing and output from the file; the graph; the example requests and the replies the code
+gives to them on that view; and the file, byte-exact.
+The graph:
+  base       sha256 of {"url":"https://tiesapi.com/api/<name>","memo":"<memo>"}: no content yet
+  version k  sha256 of {"content":"sha256:<hex>","memo":"<memo>","prev":"<hash of the link before>"}
+  head       the hash of the last version (the base while there is none); a session cites the head
+  current    true when the last version's content is the sha256 of the file above "versions"
+  builds on, built on by   the other contracts, each by URL and head
+Hashes are sha256 of compact JSON (separators "," and ":", keys in the order shown, UTF-8 as is).
+Add a contract: write the file; nothing else changes. GET /api/<name> then shows the base alone and content_sha256;
+append under versions the line   sha256:<content_sha256> <memo>
+Change a contract: edit above "versions" (never the memo line), then append one line. Never change or remove a line under
+versions. Two contracts may not declare the same route: the second is refused.
+Hash the content yourself:  sed '/^versions$/,$d' catalog/contracts/<name> | shasum -a 256"""
+SECTIONS = ("input", "processing", "output", "graph", "example")
+HEAD_KEYS = ("route", "handler", "memo")
+ROUTE = re.compile(r"(GET|POST) (/[A-Za-z0-9_.:/-]*(?:<[a-z]+>)?)")
+VERSION = re.compile(r"[ \t]*(sha256:[0-9a-f]{64})(?:[ \t]+(.*?))?[ \t]*")
+REQUEST = re.compile(r"[ \t]*(GET|POST) (/\S*)[ \t]*(.*)")
+BUILTIN = [("GET", "/", "home"), ("GET", "/docs", "docs"), ("GET", "/catalog", "catalog"), ("GET", "/catalog/sha256:<hex>", "object"),
+           ("GET", "/catalog/<entry>", "entry"), ("GET", "/api", "contracts"), ("GET", "/api/<contract>", "contract"),
+           ("GET", "/robots.txt", "robots"), ("GET", "/favicon.ico", "favicon"),
+           ("POST", "/receipt", "receipt"), ("POST", "/verify", "verify"), ("POST", "/sop/check", "sop_check")]
+
+
+def _sha(b):
+    return "sha256:" + hashlib.sha256(b).hexdigest()
+
+
+def _compact(d):
+    return json.dumps(d, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+
+
+def _contract_names():
+    try:
+        return sorted(f for f in os.listdir(CONTRACTS) if SEGMENT.match(f) and os.path.isfile(os.path.join(CONTRACTS, f)))
+    except OSError:
+        return []
+
+
+def _chain(url, memo, versions, content_sha256):
+    """The base, then one link per version: each hashes the content, the memo and the link before. Append only."""
+    base = dict(url=url, memo=memo)
+    prev = base_hash = _sha(_compact(base))
+    links = []
+    for n, (content, vmemo) in enumerate(versions, 1):
+        link = dict(content=content, memo=vmemo, prev=prev)
+        prev = _sha(_compact(link))
+        links.append(dict(n=n, **link, hash=prev))
+    return dict(base=dict(base, hash=base_hash), versions=links, head=prev,
+                current=bool(links) and links[-1]["content"] == content_sha256)
+
+
+def _contract(name):
+    """One contract file, read: its form and its chain. None if there is no such file. A file that does not follow the form
+    comes back with "error" and routes nothing."""
+    if name not in _contract_names():
+        return None
+    try:
+        data = open(os.path.join(CONTRACTS, name), "rb").read()
+    except OSError:
+        return None
+    m = re.search(rb"\nversions(?:\n|\Z)", data)                   # the line "versions", also as the file's last line
+    content, tail = (data[:m.start() + 1], data[m.end():]) if m else (data, b"")
+    c = dict(name=name, url=f"{HOME}/api/{name}", title="", route="", handler="", memo="", input="", processing="", output="",
+             builds_on=[], notes=[], example=[], content_sha256=_sha(content), sha256=_sha(data), bytes=data.decode("utf-8", "replace"))
+    try:
+        lines, chain = content.decode("utf-8").splitlines(), tail.decode("utf-8").splitlines()
+    except UnicodeDecodeError:
+        return dict(c, error="the file is not UTF-8", chain=_chain(c["url"], "", [], c["content_sha256"]))
+    if lines and lines[0].startswith("#"):
+        c["title"], lines = lines[0].lstrip("#").strip(), lines[1:]
+    sec, body = None, {k: [] for k in SECTIONS}
+    for l in lines:
+        if l in SECTIONS:
+            sec = l
+        elif sec:
+            body[sec].append(l[2:] if l.startswith("  ") else l)
+        else:
+            c.update({k: l[len(k):].strip() for k in HEAD_KEYS if l.startswith(k + " ")})
+    c.update({k: "\n".join(body[k]).strip("\n") for k in ("input", "processing", "output")})
+    for l in body["graph"]:
+        m = re.fullmatch(r"[ \t]*builds on[ \t]+(\S+)[ \t]*", l)
+        if m:
+            c["builds_on"].append(m.group(1))
+        elif l.strip():
+            c["notes"].append(l.strip())
+    for l in body["example"]:
+        m = REQUEST.fullmatch(l)
+        if m:
+            c["example"].append([m.group(1), m.group(2), m.group(3)])
+        elif c["example"] and l.strip():
+            c["example"][-1][2] += " " + l.strip()                 # a long JSON body may go on over the next lines
+    versions, odd = [], []
+    for l in chain:
+        m = VERSION.fullmatch(l)
+        if m:
+            versions.append((m.group(1), m.group(2) or ""))
+        elif l.strip():
+            odd.append(l.strip()[:40])
+    c["chain"] = _chain(c["url"], c["memo"], versions, c["content_sha256"])
+    builtin = {f"{m} {p}": h for m, p, h in BUILTIN}
+    err = ("route must be GET or POST and a path, such as GET /path or GET /path/<name>" if not ROUTE.fullmatch(c["route"]) else None) \
+        or (f"handler must be one of: {', '.join(HANDLERS)}" if c["handler"] not in HANDLERS else None) \
+        or (f"{c['route']} is built in, with handler {builtin[c['route']]}" if builtin.get(c["route"], c["handler"]) != c["handler"] else None) \
+        or next((f"missing part: {k}" for k in SECTIONS if k not in lines), None) \
+        or next((f"empty part: {k}" for k in ("input", "processing", "output") if not c[k]), None) \
+        or ("the example has no request: a line GET /path or POST /path {...}" if not c["example"] else None) \
+        or (f"a line under versions is not 'sha256:<64 hex> <memo>': {odd[0]}" if odd else None)
+    return dict(c, error=err) if err else c
+
+
+def _contracts():
+    """Every contract file here, read. Never raises."""
+    out = []
+    for n in _contract_names():
+        try:
+            c = _contract(n)
+        except Exception as e:                                       # listed with its error, never a 500
+            c = dict(name=n, url=f"{HOME}/api/{n}", route="", title="", error=f"the file could not be read: {type(e).__name__}",
+                     builds_on=[], chain=_chain(f"{HOME}/api/{n}", "", [], ""))
+        if c:
+            first = next((x for x in out if not x.get("error") and x["route"] == c["route"]), None)
+            if first and not c.get("error"):                     # one route, one contract: the first by name keeps it
+                c = dict(c, error=f"{c['route']} is already the route of contract {first['name']}")
+            out.append(c)
+    return out
+
+
+def _graph(c, every):
+    """The graph of one page: its chain, and the contracts it builds on and is built on by, each by URL and head; as nodes and
+    edges too."""
+    g = dict(c["chain"])
+    heads = {x["name"]: x["chain"]["head"] for x in every}
+    g["builds_on"] = [dict(name=n, url=f"{HOME}/api/{n}", head=heads.get(n)) for n in c["builds_on"]]
+    g["built_on_by"] = [dict(name=x["name"], url=x["url"], head=x["chain"]["head"]) for x in every
+                        if c["name"] in x.get("builds_on", []) and not x.get("error")]
+    nodes = [dict(id=g["base"]["hash"], kind="base", url=c["url"], memo=g["base"]["memo"])]
+    nodes += [dict(id=v["hash"], kind="version", n=v["n"], content=v["content"], memo=v["memo"]) for v in g["versions"]]
+    edges = [{"from": v["hash"], "to": v["prev"], "rel": "prev"} for v in g["versions"]]
+    for b, out in [(b, True) for b in g["builds_on"]] + [(b, False) for b in g["built_on_by"]]:
+        if b["head"] and b["head"] != g["head"]:
+            if b["head"] not in [x["id"] for x in nodes]:
+                nodes.append(dict(id=b["head"], kind="page", url=b["url"]))
+            edges.append({"from": g["head"], "to": b["head"], "rel": "builds on"} if out else {"from": b["head"], "to": g["head"], "rel": "builds on"})
+    return dict(g, nodes=nodes, edges=edges, notes=c.get("notes", []))
+
+
+def _run_examples(c):
+    """Run the example requests of a contract through the router, now, in order; {{k.field}} is the field of reply k.
+    Nothing is logged for them: they are part of the page's request."""
+    out, replies = [], []
+    def fill(s):
+        def one(m):
+            k = int(m.group(1))
+            v = replies[k - 1].get(m.group(2)) if 0 < k <= len(replies) else None
+            return v if isinstance(v, str) else m.group(0)
+        return re.sub(r"\{\{([0-9]+)\.([A-Za-z_][A-Za-z0-9_]*)\}\}", one, s)
+    for method, path, body in c["example"]:
+        path, body = fill(path), fill(body)
+        try:
+            r = _route(method, path, False, {"body": body, "ties_example": True})
+            status = r["statusCode"]
+            reply = json.loads(r["body"]) if r["headers"].get("Content-Type") == "application/json" else r["body"]
+        except Exception as e:
+            status, reply = 500, dict(error=f"the example failed in the code: {type(e).__name__}")
+        replies.append(reply if isinstance(reply, dict) else {})
+        try:
+            shown = json.loads(body) if body else None
+        except ValueError:
+            shown = body
+        out.append(dict(request=dict(method=method, path=path, body=shown), reply=dict(status=status, body=reply)))
+    return out
+
+
+def _contract_page(c, every, run=True):
+    p = {k: c.get(k, "") for k in ("name", "url", "route", "handler", "title", "memo", "input", "processing", "output")}
+    p["graph"] = _graph(c, every)
+    if run and not c.get("error"):
+        p["example"] = _run_examples(c)
+    else:
+        p["example"] = []
+        p["example_note"] = "not run: " + ("the contract does not follow the form" if c.get("error") else "an example inside an example")
+    p.update({k: c.get(k, "") for k in ("content_sha256", "sha256", "bytes")})
+    if c.get("error"):
+        p["error"] = c["error"]
+    return p
+
+
+def _cut(x):
+    if isinstance(x, str) and len(x) > 400:
+        return x[:400] + f" … ({len(x)} characters; the whole reply is in the JSON of this page)"
+    if isinstance(x, dict):
+        return {k: _cut(v) for k, v in x.items()}
+    if isinstance(x, list):
+        return [_cut(v) for v in x]
+    return x
+
+
+def _example_text(e):
+    q, r = e["request"], e["reply"]
+    show = lambda b: b if isinstance(b, str) else json.dumps(_cut(b), ensure_ascii=False, indent=2)
+    return (f"request  {q['method']} {q['path']}" + ("" if q["body"] is None else "\n" + show(q["body"]))
+            + f"\n\nreply    {r['status']}\n{show(r['body'])}")
+
+
+def _graph_text(p):
+    g = p["graph"]
+    out = [f"base        {g['base']['url']}", f"            memo  {g['base']['memo']}", f"            {g['base']['hash']}"]
+    if not g["versions"]:
+        out.append("            no content yet: the base alone")
+    for v in g["versions"]:
+        out += ["  ^ prev", f"version {v['n']:<3} content {v['content']}", f"            memo  {v['memo']}",
+                f"            prev  {v['prev']}", f"            {v['hash']}"]
+    out.append(f"head        {g['head']}" + ("  (current: the last version is this file's content)" if g["current"]
+                                              else f"  (not current: content {p['content_sha256']} is not a version yet)"))
+    out += [f"builds on   {b['url']}  {b['head'] or 'no such contract here'}" for b in g["builds_on"]]
+    out += [f"built on by {b['url']}  {b['head']}" for b in g["built_on_by"]]
+    out += [f"note        {n}" for n in g["notes"]]
+    return "\n".join(out)
+
+
+def _contract_html(p):
+    h = html.escape
+    g = p["graph"]
+    related = "".join(f'<li>{rel} <a href="/api/{h(b["name"])}">{h(b["name"])}</a> <span class="dim">{h(b["head"] or "")}</span></li>'
+                      for rel, key in (("builds on", "builds_on"), ("built on by", "built_on_by")) for b in g[key])
+    ex = "".join(f"<pre>{h(_example_text(e))}</pre>" for e in p["example"]) or f'<p class="dim">{h(p.get("example_note", ""))}</p>'
+    return _page(200, f"TIES · {p['route'] or p['name']}", (
+        f"<h1>{h(p['route'] or p['name'])}</h1><p>{h(p['title'])}</p>"
+        f"<p class=\"dim\">{h(p['url'])}<br>head {h(g['head'])}</p>"
+        + (f"<p><b>this contract does not follow the form:</b> {h(p['error'])}</p>" if p.get("error") else "")
+        + f"<h2>input</h2><pre>{h(p['input'])}</pre>"
+        f"<h2>processing</h2><pre>{h(p['processing'])}</pre>"
+        f"<h2>output</h2><pre>{h(p['output'])}</pre>"
+        f"<h2>graph</h2><pre>{h(_graph_text(p))}</pre>" + (f"<ul>{related}</ul>" if related else "")
+        + f"<h2>example</h2><p class=\"dim\">the requests below were run by the code for this view; the replies are what it gave</p>{ex}"
+        f"<h2>the file</h2><p class=\"dim\">catalog/contracts/{h(p['name'])} · {h(p['sha256'])}<br>content {h(p['content_sha256'])}</p>"
+        f"<pre>{h(p['bytes'])}</pre>"))
+
+
+def _contracts_html(every):
+    h = html.escape
+    items = "".join(f'<li><a href="/api/{h(c["name"])}">{h(c["route"] or c["name"])}</a> {h(c["title"])}<br>'
+                    f'<span class="dim">head {h(c["chain"]["head"])}'
+                    + (" · current" if c["chain"]["current"] else " · not current") + (f' · error: {h(c["error"])}' if c.get("error") else "")
+                    + "</span></li>" for c in every) or '<li class="dim">no contract files here</li>'
+    return _page(200, "TIES · api", (
+        f"<h1>the API: one page per contract</h1><h2>contracts</h2><ul>{items}</ul>"
+        f"<h2>the form</h2><pre>{h(FORM)}</pre><h2>handlers</h2><pre>{h(', '.join(HANDLERS))}</pre>"))
 
 
 # ---- receipts -----------------------------------------------------------------------------------------------------
@@ -571,19 +866,34 @@ def lambda_handler(event, context=None):
     return r
 
 
+def _match(template, path):
+    """A route template matches a path exactly, or, when it ends in <name>, every path that starts with what is before it."""
+    if "<" in template:
+        return path.startswith(template[:template.index("<")])
+    return path == template or (template == "/" and path == "")
+
+
+def _table():
+    """The routes, in order: the built-in ones (so the bundle answers with no contract file at all), then the route of every
+    contract file that follows the form and is not built in. Adding a contract adds its route here; this code does not change.
+    Never raises."""
+    out = list(BUILTIN)
+    try:
+        for c in _contracts():
+            if not c.get("error"):
+                m, p = c["route"].split(" ", 1)
+                if not any(m == x and p == y for x, y, _ in out):
+                    out.append((m, p, c["handler"]))
+    except Exception:
+        pass
+    return out
+
+
 def _route_name(method, path):
     """The route a request matches, for the log line: a template, never the caller's data."""
-    if method == "GET":
-        if path in ("/", ""):
-            return "GET /"
-        if path in ("/docs", "/catalog", "/robots.txt", "/favicon.ico"):
-            return f"GET {path}"
-        if path.startswith("/catalog/sha256:"):
-            return "GET /catalog/sha256:<hex>"
-        if path.startswith("/catalog/"):
-            return "GET /catalog/<entry>"
-    if method == "POST" and path in ("/receipt", "/verify", "/sop/check"):
-        return f"POST {path}"
+    for m, template, _ in _table():
+        if m == method and _match(template, path):
+            return f"{m} {template}"
     return "none"
 
 
@@ -596,60 +906,117 @@ def _log(line):
 
 
 def _route(method, path, browser, event):
-    if method == "GET" and path in ("/", ""):
-        if browser:
-            return _home_html()
-        return _reply(200, dict(name="TIES API", authority=AUTHORITY, contact=CONTACT, docs=f"{HOME}/docs", code_sha256=CODE,
-                                routes=ROUTES, receipt={"federated_id": "theisen-api:<16 hex>", "line": ENTRY}))
-    if method == "GET" and path == "/docs":
-        return _entry_html(_docs()) if browser else _reply(200, dict(authority=AUTHORITY, **_docs()))
-    if method == "GET" and path == "/catalog":
-        return _catalog_html() if browser else _reply(200, dict(authority=AUTHORITY, keywords=_keywords(), entries=_listing(),
-                                                                 objects=_objects()))
-    if method == "GET" and path.startswith("/catalog/sha256:"):
-        o = _object(path[len("/catalog/sha256:"):].rstrip("/"))
-        if o:
-            return _entry_html(o) if browser else _reply(200, dict(authority=AUTHORITY, **o))
-        return _not_found_html(path) if browser else _reply(404, dict(error="no bytes for this content address here; "
-                                                                             "the id is still valid as a label"))
-    if method == "GET" and path.startswith("/catalog/"):
-        e = _entry(path[len("/catalog/"):].rstrip("/"))
-        if e:
-            return _entry_html(e) if browser else _reply(200, dict(authority=AUTHORITY, **e))
-        return _not_found_html(path) if browser else _reply(404, dict(error="no such catalog entry"))
-    if method == "GET" and path == "/robots.txt":
-        return _raw(200, "text/plain; charset=utf-8", "User-agent: *\nAllow: /\n")
-    if method == "GET" and path == "/favicon.ico":
-        return _raw(200, "image/svg+xml", FAVICON)
-    if method != "POST" or path not in ("/receipt", "/verify", "/sop/check"):
-        return _not_found_html(path) if browser else _reply(404, dict(error="no such route"))
+    for m, template, handler in _table():
+        if m == method and _match(template, path):
+            arg = path[len(template[:template.index("<")]):].rstrip("/") if "<" in template else path
+            return HANDLERS[handler](arg, path, browser, event)
+    return _not_found_html(path) if browser else _reply(404, dict(error="no such route"))
+
+
+# ---- the handlers: the general operations a route (built in, or a contract's) runs ----------------------------------
+# Each takes (arg, path, browser, event); arg is the rest of the path for a template that ends in <name>, else the path.
+
+def _h_home(arg, path, browser, event):
+    if browser:
+        return _home_html()
+    return _reply(200, dict(name="TIES API", authority=AUTHORITY, contact=CONTACT, docs=f"{HOME}/docs", api=f"{HOME}/api",
+                            code_sha256=CODE, routes=ROUTES, receipt={"federated_id": "theisen-api:<16 hex>", "line": ENTRY}))
+
+
+def _h_docs(arg, path, browser, event):
+    return _entry_html(_docs()) if browser else _reply(200, dict(authority=AUTHORITY, **_docs()))
+
+
+def _h_catalog(arg, path, browser, event):
+    return _catalog_html() if browser else _reply(200, dict(authority=AUTHORITY, keywords=_keywords(), entries=_listing(),
+                                                             objects=_objects()))
+
+
+def _h_object(arg, path, browser, event):
+    o = _object(arg)
+    if o:
+        return _entry_html(o) if browser else _reply(200, dict(authority=AUTHORITY, **o))
+    return _not_found_html(path) if browser else _reply(404, dict(error="no bytes for this content address here; "
+                                                                         "the id is still valid as a label"))
+
+
+def _h_entry(arg, path, browser, event):
+    e = _entry(arg)
+    if e:
+        return _entry_html(e) if browser else _reply(200, dict(authority=AUTHORITY, **e))
+    return _not_found_html(path) if browser else _reply(404, dict(error="no such catalog entry"))
+
+
+def _h_robots(arg, path, browser, event):
+    return _raw(200, "text/plain; charset=utf-8", "User-agent: *\nAllow: /\n")
+
+
+def _h_favicon(arg, path, browser, event):
+    return _raw(200, "image/svg+xml", FAVICON)
+
+
+def _h_contracts(arg, path, browser, event):
+    every = _contracts()
+    if browser:
+        return _contracts_html(every)
+    return _reply(200, dict(authority=AUTHORITY, url=f"{HOME}/api", form=FORM, handlers=list(HANDLERS), contracts=[
+        dict({k: c.get(k, "") for k in ("name", "url", "route", "title")}, head=c["chain"]["head"], current=c["chain"]["current"],
+             **({"error": c["error"]} if c.get("error") else {})) for c in every]))
+
+
+def _h_contract(arg, path, browser, event):
+    every = _contracts()
+    c = next((x for x in every if x["name"] == arg), None)
+    if not c:
+        return _not_found_html(path) if browser else _reply(404, dict(error="no such contract"))
+    p = _contract_page(c, every, run=not event.get("ties_example"))
+    return _contract_html(p) if browser else _reply(200, dict(authority=AUTHORITY, **p))
+
+
+def _request(event, limit):
+    """The JSON body of a POST and its federated id: (request, federated id, None), or (None, None, the refusal)."""
     raw = event.get("body") or ""
     if event.get("isBase64Encoded"):
         import base64
         try:
             raw = base64.b64decode(raw).decode("utf-8", "replace")
         except Exception:
-            return _reply(400, dict(error="body is not valid base64"))
-    if len(raw) > (MAX_SOP_BODY if path == "/sop/check" else MAX_BODY):
-        return _reply(413, dict(error="body too large"))
+            return None, None, _reply(400, dict(error="body is not valid base64"))
+    if len(raw) > limit:
+        return None, None, _reply(413, dict(error="body too large"))
     try:
         req = json.loads(raw)
         assert isinstance(req, dict)
     except Exception:
-        return _reply(400, dict(error="send a JSON object"))
+        return None, None, _reply(400, dict(error="send a JSON object"))
     fid = req.get("federated_id") or ""
     if not _is(FID, fid):
-        return _reply(400, dict(error="federated_id must look like theisen-api:<16 hex>"))
-    if path == "/sop/check":
-        return _reply(200, _sop_check(fid, req.get("sop"), req.get("lines"), req.get("receipts")))
-    if path == "/receipt":
-        h, extra, err = _check_line(fid, req.get("line"))
-        if err:
-            return _reply(400, dict(error=err, entry=ENTRY))
-        issued_at = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-        return _reply(201, dict(receipt=_sign(fid, h, issued_at, extra.get("label_sha256")), issued_at=issued_at, hash=h, **extra,
-                                federated_id=fid, authority=AUTHORITY, stored=False, attests=(ATTESTS_ADDRESS if extra.get("label", "").startswith(f"{HOME}/catalog/sha256:") else ATTESTS_ENTRY) if extra else ATTESTS,
-                                contact=CONTACT))
+        return None, None, _reply(400, dict(error="federated_id must look like theisen-api:<16 hex>"))
+    return req, fid, None
+
+
+def _h_sop_check(arg, path, browser, event):
+    req, fid, refused = _request(event, MAX_SOP_BODY)
+    return refused or _reply(200, _sop_check(fid, req.get("sop"), req.get("lines"), req.get("receipts")))
+
+
+def _h_receipt(arg, path, browser, event):
+    req, fid, refused = _request(event, MAX_BODY)
+    if refused:
+        return refused
+    h, extra, err = _check_line(fid, req.get("line"))
+    if err:
+        return _reply(400, dict(error=err, entry=ENTRY))
+    issued_at = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    return _reply(201, dict(receipt=_sign(fid, h, issued_at, extra.get("label_sha256")), issued_at=issued_at, hash=h, **extra,
+                            federated_id=fid, authority=AUTHORITY, stored=False, attests=(ATTESTS_ADDRESS if extra.get("label", "").startswith(f"{HOME}/catalog/sha256:") else ATTESTS_ENTRY) if extra else ATTESTS,
+                            contact=CONTACT))
+
+
+def _h_verify(arg, path, browser, event):
+    req, fid, refused = _request(event, MAX_BODY)
+    if refused:
+        return refused
     h = req.get("hash") or req.get("tie_hash") or ""
     issued_at, receipt, ls = req.get("issued_at") or "", req.get("receipt") or "", req.get("label_sha256")
     if not (_is(TIE_HASH, h) and _is(ISSUED_AT, issued_at) and isinstance(receipt, str) and re.fullmatch(r"[0-9a-f]{64}", receipt)):
@@ -661,3 +1028,8 @@ def _route(method, path, browser, event):
     if ls:
         out["label_sha256"] = ls
     return _reply(200, dict(**out, attests=ATTESTS_LABEL if ls else ATTESTS))
+
+
+HANDLERS = {"home": _h_home, "docs": _h_docs, "catalog": _h_catalog, "object": _h_object, "entry": _h_entry, "robots": _h_robots,
+            "favicon": _h_favicon, "contracts": _h_contracts, "contract": _h_contract, "receipt": _h_receipt, "verify": _h_verify,
+            "sop_check": _h_sop_check}

@@ -1,0 +1,22 @@
+# GET /api/<contract>: one contract page, in the one form, with its example run now
+route     GET /api/<contract>
+handler   contract
+memo      the contract of GET /api/<contract> on tiesapi.com
+input
+  <contract>: the name of a file under catalog/contracts/
+processing
+  1 read the file: route, handler, memo, then input, processing, output, graph, example, versions
+  2 the chain: base = sha256 of the page URL and the memo; each version line adds the sha256 of the content, the memo and
+    the hash of the link before; head = the last
+  3 the graph: the chain, and the contracts this one builds on and is built on by, each by URL and head
+  4 run the example requests through the same router, now, and keep the replies
+output
+  200 {name, url, route, handler, title, memo, input, processing, output, graph, example, content_sha256, sha256, bytes}
+  404 {error: "no such contract"}
+  check: content_sha256 is the sha256 of the file above "versions"; the last version's content equals it (current)
+graph
+  builds on contracts
+example
+  GET /api/receipt
+versions
+  sha256:e5ab49bf4a65152ad697d6cd000f8a12e4d9fa568325c1488c051fa1495d7950 first version

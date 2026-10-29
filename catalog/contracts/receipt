@@ -1,0 +1,25 @@
+# POST /receipt: one register line in, a timestamped receipt out; nothing stored
+route     POST /receipt
+handler   receipt
+memo      the contract of POST /receipt on tiesapi.com
+input
+  {"federated_id": "theisen-api:<16 hex>", "line": "<one register line, as a JSON string>"}
+  the line: n, when, who, label, inside, parents, memo, by, prev, hash (SOP-001); a run line adds sop, step, nonce, prev_nonce
+processing
+  1 the body is one JSON object of at most 16,384 characters, and federated_id has the form theisen-api:<16 hex>
+  2 the line hashes to its own hash (compact JSON without hash, UTF-8 as is), and who equals federated_id
+  3 the label is a catalog URL: a named entry that is in the catalog, or a content address (nothing looked up)
+  4 inside, parents, by, memo, n and prev have their forms; line 1 is the registration
+  5 a run line: step k shows a nonce whose sha256 is the nonce of the step before
+  6 issued_at = now (UTC, whole seconds); receipt = HMAC-SHA256(authority key, "ties-receipt-v1|federated_id|hash|issued_at|label_sha256")
+output
+  201 {receipt, issued_at, hash, label, label_sha256, inside, federated_id, authority, stored: false, attests, contact}
+  400 {error, entry}: the first rule the line breaks, and a template of a line
+  check: POST /verify with federated_id, hash, issued_at, receipt and label_sha256 answers valid: true
+graph
+  builds on catalog-entry
+  builds on catalog-object
+example
+  POST /receipt {"federated_id": "theisen-api:d030e7551d91b584", "line": "{\"n\":1,\"who\":\"theisen-api:d030e7551d91b584\",\"label\":\"https://tiesapi.com/catalog/sha256:5989aca695bc8d3a40aa3c35f5197e7e7eb14737f416535968d7e9f1faa42e7a\",\"inside\":\"sha256:5989aca695bc8d3a40aa3c35f5197e7e7eb14737f416535968d7e9f1faa42e7a\",\"parents\":[],\"memo\":\"example: line 1, the registration\",\"by\":\"human\",\"prev\":null,\"hash\":\"sha256:b984cebaf1ab8f2b29004acf928d9b5e7d48bf6ed84d93c29a1ac30cf84dfae2\"}"}
+versions
+  sha256:ff6ba36a70378c7e6c81b20b8726616ee6d548b8c25cb349e34a83784488e558 first version

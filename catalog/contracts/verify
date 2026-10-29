@@ -1,0 +1,20 @@
+# POST /verify: a receipt in, valid or not out
+route     POST /verify
+handler   verify
+memo      the contract of POST /verify on tiesapi.com
+input
+  {"federated_id", "hash", "issued_at", "receipt", "label_sha256"}: the fields of a reply of POST /receipt
+  label_sha256 for an entry receipt; left out for a v0 tie receipt
+processing
+  1 federated_id, hash, issued_at and receipt have their forms; label_sha256, when sent, is sha256:<64 hex>
+  2 recompute the HMAC with the authority key over the same fields, and compare in constant time
+output
+  200 {valid: true | false, federated_id, hash, issued_at, label_sha256, attests}; 400 for a malformed field
+  check: any change to one field gives valid: false
+graph
+  builds on receipt
+example
+  POST /receipt {"federated_id": "theisen-api:d030e7551d91b584", "line": "{\"n\":1,\"who\":\"theisen-api:d030e7551d91b584\",\"label\":\"https://tiesapi.com/catalog/sha256:5989aca695bc8d3a40aa3c35f5197e7e7eb14737f416535968d7e9f1faa42e7a\",\"inside\":\"sha256:5989aca695bc8d3a40aa3c35f5197e7e7eb14737f416535968d7e9f1faa42e7a\",\"parents\":[],\"memo\":\"example: line 1, the registration\",\"by\":\"human\",\"prev\":null,\"hash\":\"sha256:b984cebaf1ab8f2b29004acf928d9b5e7d48bf6ed84d93c29a1ac30cf84dfae2\"}"}
+  POST /verify {"federated_id": "theisen-api:d030e7551d91b584", "hash": "{{1.hash}}", "issued_at": "{{1.issued_at}}", "receipt": "{{1.receipt}}", "label_sha256": "{{1.label_sha256}}"}
+versions
+  sha256:3a8f3d31c4652482cde30f760eeaa39a453c36609a8c81d97896539f5d4cfd7b first version

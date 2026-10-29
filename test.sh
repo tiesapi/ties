@@ -210,4 +210,171 @@ check("a missing key answers JSON 500 with request_id, not a crash",
 PY
 while IFS= read -r l; do case "$l" in "ok   "*) ok "${l#ok   }";; "FAIL "*) bad "${l#FAIL }";; esac; done < "$T/log.out"
 [ "$(grep -c '^ok   \|^FAIL ' "$T/log.out")" = 10 ] || bad "docs and logging checks: expected 10 results, got $(grep -c '^ok   \|^FAIL ' "$T/log.out")"
+# the page API: one page per contract (one route), one form (input, processing, output, graph), a worked example made by the
+# code on each view, the base-then-append chain and the graph on every page, a contract added as one file, and the bundle
+# that bin/publish makes today. The site catalog here is a copy of catalog/ (entries, keywords, contracts); scratch key.
+mkdir -p "$T/site/catalog/contracts" "$T/bundle/catalog/entries"; cp catalog/keywords.tsv "$T/site/catalog/"; cp -R catalog/entries "$T/site/catalog/"
+for f in catalog/contracts/*; do [ -f "$f" ] && cp "$f" "$T/site/catalog/contracts/"; done
+cp endpoint/lambda_function.py "$T/bundle/"; cp catalog/keywords.tsv "$T/bundle/catalog/"
+for f in catalog/entries/*; do [ -f "$f" ] && cp "$f" "$T/bundle/catalog/entries/"; done
+TIES_CATALOG="$T/site/catalog" python3 - endpoint "$T/site/catalog/contracts" "$T/bundle" catalog/contracts > "$T/api.out" 2>&1 <<'PY' || bad "page API (contracts) checks: the check script failed ($(tail -1 "$T/api.out"))"
+import contextlib, hashlib, io, json, os, re, subprocess, sys, types
+EP, CON, BUNDLE, REPO_CON = sys.argv[1:5]; HOME = "https://tiesapi.com"
+sys.path.insert(0, EP); import lambda_function as lf
+H = lambda b: hashlib.sha256(b).hexdigest()
+def js(d): return json.dumps(d, separators=(",", ":"), ensure_ascii=False)
+def check(name, fn):
+    try: cond = bool(fn())
+    except Exception as e: cond = False; name += f" (raised {type(e).__name__})"
+    print(("ok   " if cond else "FAIL ") + name)
+def call(method, path, body=None, accept=""):
+    ev = {"requestContext": {"http": {"method": method}}, "rawPath": path, "headers": {"accept": accept},
+          "body": body if isinstance(body, str) or body is None else json.dumps(body)}
+    out = io.StringIO()
+    with contextlib.redirect_stdout(out):
+        try: r = lf.lambda_handler(ev, types.SimpleNamespace(aws_request_id="api-test"))
+        except Exception as e: r = {"statusCode": "raised " + type(e).__name__, "headers": {}, "body": ""}
+    return r, [json.loads(l) for l in out.getvalue().splitlines() if l.startswith("{")]
+def jb(r):
+    try: return json.loads(r["body"])
+    except Exception: return {}
+def get(path): return jb(call("GET", path)[0])
+routes = ["GET /"] + get("/").get("routes", [])
+contracts = get("/api").get("contracts", []) or []
+names = [c.get("name") for c in contracts]
+pages = {n: get(f"/api/{n}") for n in names}
+check("GET /api lists one contract page per route: GET / and every route it names have exactly one, at https://tiesapi.com/api/<name>",
+      lambda: contracts and all([c.get("route") for c in contracts].count(x) == 1 for x in routes)
+      and all(c.get("url") == f"{HOME}/api/{c.get('name')}" for c in contracts))
+check("every contract page has the one form: input, processing and output from its file, and the graph; none empty",
+      lambda: pages and all(all(p.get(k) for k in ("input", "processing", "output", "graph")) for p in pages.values()))
+def in_order(t):
+    i = [t.find(f"<h2>{k}</h2>") for k in ("input", "processing", "output", "graph", "example")]
+    return min(i) >= 0 and i == sorted(i)
+check("every contract page for a browser shows input, processing, output, graph and example, in that order",
+      lambda: pages and all((lambda r: r["statusCode"] == 200 and r["headers"]["Content-Type"].startswith("text/html") and in_order(r["body"]))
+                            (call("GET", f"/api/{n}", accept="text/html")[0]) for n in pages))
+check("every contract page carries a worked example: real requests and the replies the code gives, each reply below 400, valid true where a reply has valid",
+      lambda: pages and all(p.get("example") and all(isinstance(e["reply"]["status"], int) and e["reply"]["status"] < 400
+                                                     and (not isinstance(e["reply"]["body"], dict) or e["reply"]["body"].get("valid", True) is True)
+                                                     for e in p["example"]) for p in pages.values()))
+check("the last request of every example is a request to the page's own route",
+      lambda: pages and all(lf._route_name(p["example"][-1]["request"]["method"], p["example"][-1]["request"]["path"]) == p["route"]
+                            for p in pages.values()))
+def generated():
+    real = lf.HANDLERS["catalog"]
+    lf.HANDLERS["catalog"] = lambda *a: lf._reply(200, dict(marker="zq-generated-7c1e"))
+    try: changed = get("/api/catalog")
+    finally: lf.HANDLERS["catalog"] = real
+    return (changed["example"][-1]["reply"]["body"].get("marker") == "zq-generated-7c1e"
+            and get("/api/catalog")["example"][-1]["reply"]["body"] == get("/catalog"))
+check("the example is made by the code on each view: a changed handler changes the reply on the page; unchanged, it equals a direct request", generated)
+def chain_of(path, url):
+    data = open(path, "rb").read(); i = data.find(b"\nversions\n")
+    content = data[:i + 1] if i >= 0 else data
+    memo = next((l[4:].strip() for l in content.decode("utf-8").splitlines() if l.startswith("memo ")), "")
+    base = "sha256:" + H(js({"url": url, "memo": memo}).encode()); prev, links = base, []
+    for l in (data[i + 10:].decode("utf-8").splitlines() if i >= 0 else []):
+        m = re.fullmatch(r"[ \t]*(sha256:[0-9a-f]{64})(?:[ \t]+(.*?))?[ \t]*", l)
+        if m:
+            d = {"content": m.group(1), "memo": m.group(2) or "", "prev": prev}; prev = "sha256:" + H(js(d).encode()); links.append(dict(d, hash=prev))
+    return base, links, "sha256:" + H(content)
+def chains():
+    for n, p in pages.items():
+        base, links, csha = chain_of(os.path.join(CON, n), f"{HOME}/api/{n}"); g = p["graph"]
+        if not (g["base"]["hash"] == base and g["base"]["url"] == f"{HOME}/api/{n}" and links and links[-1]["content"] == csha
+                and [(v["content"], v["memo"], v["prev"], v["hash"]) for v in g["versions"]] == [(l["content"], l["memo"], l["prev"], l["hash"]) for l in links]
+                and g["current"] is True and g["head"] == links[-1]["hash"] and p["content_sha256"] == csha):
+            return False
+    return bool(pages)
+check("every page's chain recomputes from its file: base = sha256 of url and memo; each version hashes content, memo and the link before; the last version is the file's content", chains)
+def append_only():
+    if subprocess.run(["git", "rev-parse", "--git-dir"], capture_output=True).returncode != 0:
+        return bool(pages)                                            # not a git checkout: nothing to compare
+    for n in pages:
+        old = subprocess.run(["git", "show", f"HEAD:./{REPO_CON}/{n}"], capture_output=True)
+        if old.returncode == 0:
+            tail = lambda b: [l.strip() for l in b.split(b"\nversions\n", 1)[1].splitlines() if l.strip()] if b"\nversions\n" in b else []
+            memo = lambda b: [l for l in b.split(b"\nversions\n", 1)[0].splitlines() if l.startswith(b"memo ")]
+            cur = open(os.path.join(REPO_CON, n), "rb").read()
+            was, now = tail(old.stdout), tail(cur)
+            if now[:len(was)] != was or (was and memo(cur) != memo(old.stdout)):
+                return False
+    return bool(pages)
+check("versions are append only: no version line committed in git (HEAD) is changed or removed, nor the memo the base hashes", append_only)
+def graphs():
+    heads = {n: p["graph"]["head"] for n, p in pages.items()}
+    for n, p in pages.items():
+        g = p["graph"]; ids = {x["id"] for x in g["nodes"]}
+        if not (all(b["url"] == f"{HOME}/api/{b['name']}" and b["head"] == heads[b["name"]] for b in g["builds_on"])
+                and all(n in [x["name"] for x in pages[b["name"]]["graph"]["built_on_by"]] for b in g["builds_on"])
+                and g["base"]["hash"] in ids and all(v["hash"] in ids for v in g["versions"])
+                and all(e["from"] in ids and e["to"] in ids for e in g["edges"])
+                and len([e for e in g["edges"] if e["rel"] == "prev"]) == len(g["versions"])):
+            return False
+    return pages and any(p["graph"]["builds_on"] for p in pages.values())
+check("every page's graph: the base, every version in order, the pages it builds on and is built on by, each by URL and head hash; nodes and edges agree", graphs)
+new = os.path.join(CON, "scratch-listing")
+text = ("# GET /scratch-listing: the catalog again, under a second route (scratch, for the test run)\n"
+        "route     GET /scratch-listing\nhandler   catalog\nmemo      scratch contract for the test run\n"
+        "input\n  nothing\nprocessing\n  1 list the catalog\noutput\n  200 the same reply as GET /catalog\n"
+        "graph\n  builds on catalog\nexample\n  GET /scratch-listing\n")
+open(new, "w").write(text); csha = "sha256:" + H(text.encode())
+def added():
+    r, logs = call("GET", "/scratch-listing")
+    return ("scratch-listing" in [c["name"] for c in get("/api")["contracts"]] and r["statusCode"] == 200
+            and jb(r)["entries"] == get("/catalog")["entries"] and len(logs) == 1 and logs[0]["route"] == "GET /scratch-listing"
+            and "scratch-listing" in [x["name"] for x in get("/api/catalog")["graph"]["built_on_by"]])
+check("a contract added as one file is picked up without editing the router: listed, routed, logged by its route, in the graph of what it builds on", added)
+def base_then_append():
+    g0 = get("/api/scratch-listing"); b0 = g0["graph"]
+    open(new, "a").write(f"versions\n  {csha} first version\n"); b1 = get("/api/scratch-listing")["graph"]
+    return (b0["versions"] == [] and b0["current"] is False and b0["head"] == b0["base"]["hash"] and g0["content_sha256"] == csha
+            and len(b1["versions"]) == 1 and b1["versions"][0]["prev"] == b0["base"]["hash"] and b1["versions"][0]["content"] == csha
+            and b1["current"] is True and b1["head"] == b1["versions"][0]["hash"] and b1["base"] == b0["base"])
+check("a new contract starts as its base alone (no content yet); one appended version line makes it current, its prev the base", base_then_append)
+def malformed():
+    open(os.path.join(CON, "scratch-broken"), "w").write("# GET /scratch-broken\nroute     GET /scratch-broken\nhandler   no-such-handler\n")
+    open(os.path.join(CON, "scratch-binary"), "wb").write(b"\xff\xfe\x00route GET /\n")
+    open(os.path.join(CON, "scratch-listing2"), "wb").write(open(new, "rb").read())       # a second contract for the same route
+    try:
+        a = get("/api"); bad = {c["name"]: c for c in a["contracts"]}
+        r = call("GET", "/scratch-broken")[0]; p = call("GET", "/api/scratch-broken")[0]
+        return (bad["scratch-broken"].get("error") and r["statusCode"] == 404 and p["statusCode"] == 200 and get("/")["code_sha256"] == lf.CODE
+                and call("GET", "/catalog")[0]["statusCode"] == 200 and bad["scratch-binary"].get("error")
+                and "already the route of contract scratch-listing" in (bad["scratch-listing2"].get("error") or "")
+                and not bad["scratch-listing"].get("error"))
+    finally:
+        for f in ("scratch-broken", "scratch-binary", "scratch-listing2"): os.remove(os.path.join(CON, f))
+check("a malformed contract file, or a second contract for a route, never breaks the site: it is listed with its error, routes nothing, and every other route answers", malformed)
+def sed_rule():
+    f = os.path.join(CON, "scratch-eof"); open(f, "w").write(text.replace("scratch-listing", "scratch-eof") + "versions")
+    try:
+        want = "sha256:" + subprocess.run(f"sed '/^versions$/,$d' '{f}' | shasum -a 256", shell=True, capture_output=True, text=True).stdout[:64]
+        g = get("/api/scratch-eof")
+        return g["content_sha256"] == want and g["graph"]["versions"] == [] and not g.get("error")
+    finally:
+        os.remove(f)
+check("content_sha256 is what the documented sed command gives, also when \"versions\" is the file's last line with no newline", sed_rule)
+def logged():
+    r, logs = call("GET", "/api/receipt")
+    return r["statusCode"] == 200 and len(logs) == 1 and logs[0]["route"] == "GET /api/<contract>" and logs[0]["status"] == 200
+check("a contract page writes one log line, route GET /api/<contract>; its example requests are not logged as requests", logged)
+probe = r'''
+import json, sys; sys.path.insert(0, sys.argv[1]); import lambda_function as lf
+ex = {"GET /catalog/<entry>": "/catalog/sop-nonce-chain", "GET /catalog/sha256:<hex>": "/catalog/sha256:" + "0" * 64, "GET /api/<contract>": "/api/receipt"}
+out = {}
+for x in ["GET /"] + lf.ROUTES:
+    m, p = x.split(" ", 1); r = lf._route(m, ex.get(x, p), False, {"body": "{}"}); out[x] = [r["statusCode"], json.loads(r["body"])]
+print(json.dumps(out))
+'''
+def bundle():
+    env = {k: v for k, v in os.environ.items() if k not in ("TIES_CATALOG", "TIES_OBJECTS", "TIES_CONTRACTS")}
+    out = json.loads(subprocess.run([sys.executable, "-c", probe, BUNDLE], env=env, capture_output=True, text=True, cwd="/").stdout)
+    return ("GET /api" in out and all(s < 500 and b.get("error") != "no such route" for s, b in out.values())
+            and out["GET /api"][0] == 200 and out["GET /api"][1]["contracts"] == [] and out["GET /catalog/<entry>"][0] == 200)
+check("the bundle bin/publish makes today (lambda_function.py, catalog/keywords.tsv, catalog/entries/) answers every route below 500; GET /api answers with no contracts in it", bundle)
+PY
+while IFS= read -r l; do case "$l" in "ok   "*) ok "${l#ok   }";; "FAIL "*) bad "${l#FAIL }";; esac; done < "$T/api.out"
+[ "$(grep -c '^ok   \|^FAIL ' "$T/api.out")" = 15 ] || bad "page API (contracts) checks: expected 15 results, got $(grep -c '^ok   \|^FAIL ' "$T/api.out")"
 echo "$pass passed, $fail failed"; [ $fail -eq 0 ]

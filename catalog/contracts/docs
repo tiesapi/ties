@@ -1,0 +1,18 @@
+# GET /docs: the API reference, byte-exact, with its sha256
+route     GET /docs
+handler   docs
+memo      the contract of GET /docs on tiesapi.com
+input
+  nothing
+processing
+  1 take the reference text that ships inside lambda_function.py (DOCS)
+  2 hash its exact UTF-8 bytes
+output
+  200 {url, sha256, bytes}
+  check: sha256 of bytes, as UTF-8, equals sha256
+graph
+  the reference is one long text; each route also has its own page under https://tiesapi.com/api
+example
+  GET /docs
+versions
+  sha256:647c2077adfceed786a040275cbf1ce20f76ae92446a964a4acea2d6f015f520 first version

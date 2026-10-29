@@ -1,0 +1,20 @@
+# GET /catalog/sha256:<hex>: one object by its content address
+route     GET /catalog/sha256:<hex>
+handler   object
+memo      the contract of GET /catalog/sha256:<hex> on tiesapi.com
+input
+  <hex>: 64 lowercase hex, the sha256 of the bytes wanted
+processing
+  1 refuse anything that is not 64 hex
+  2 read catalog/objects/<hex> if its bytes hash to <hex>; else a named entry whose sha256 is <hex>
+  3 take the abstract: the title, and which of input, processing, output, graph the text has
+output
+  200 {id, url, sha256, bytes, title, parts}; 404 when no bytes are here: the address is still a valid label
+  check: sha256 of bytes equals id
+graph
+  builds on catalog-entry
+  the id exists before any name is assigned, so a register line may carry it as its label at once
+example
+  GET /catalog/sha256:d88a5318c032335902db7e50d608e35a49a1d15922bdaafdb01f79e45b4b910c
+versions
+  sha256:e2c309550883ebd2dc9f5ae2728243121d74c4356f760976dc0b95cd95342e7d first version

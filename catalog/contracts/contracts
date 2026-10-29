@@ -1,0 +1,19 @@
+# GET /api: the contracts, one page per route, and the one form they share
+route     GET /api
+handler   contracts
+memo      the contract of GET /api on tiesapi.com
+input
+  nothing
+processing
+  1 read every file under catalog/contracts/
+  2 for each: its route, its title, and the head of its chain (the hash a session cites)
+  3 give the form, once, and the handlers a contract may name
+output
+  200 {url, form, handlers, contracts: [{name, url, route, title, head, current}]}; a file that breaks the form has error
+  check: every route of GET / has exactly one contract here
+graph
+  the form is defined once, here, for every page
+example
+  GET /api
+versions
+  sha256:abca19b71aead4aa17dc222626f1be0c82d96190bd791222ac1049d35beb20bd first version

@@ -24,6 +24,7 @@ grep -q ' 0 failed' "$B/test.txt" || { grep FAIL "$B/test.txt"; echo "publish: t
 echo "== 2 bundle"
 cp endpoint/lambda_function.py "$B/"
 mkdir -p "$B/catalog/entries"; cp catalog/keywords.tsv "$B/catalog/"
+[ -d catalog/contracts ] && cp -R catalog/contracts "$B/catalog/"   # the contract pages, GET /api/<name>
 if [ -n "$FROM" ]; then
   for d in "$FROM"/*/; do d="${d%/}"; n="$(basename "$d")"
     [ -L "$d" ] || [ -L "$d/README.md" ] && { echo "   skip $n (symlink)"; continue; }   # only real files under the catalog go out

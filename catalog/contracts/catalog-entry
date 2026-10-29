@@ -1,0 +1,19 @@
+# GET /catalog/<entry>: one named label, its exact bytes and their sha256
+route     GET /catalog/<entry>
+handler   entry
+memo      the contract of GET /catalog/<entry> on tiesapi.com
+input
+  <entry>: the name of a file under catalog/entries/ (letters, digits, _ . -, and / between parts)
+processing
+  1 refuse a name that is not in that form
+  2 read the exact bytes of catalog/entries/<entry>
+  3 hash them
+output
+  200 {entry, url, sha256, bytes}; 404 {error: "no such catalog entry"}
+  check: sha256 of bytes equals sha256; the same file in git hashes the same
+graph
+  builds on catalog
+example
+  GET /catalog/sop-nonce-chain
+versions
+  sha256:c3290b2fdaf5f7b62d20a4280cdb09b6d4eacbe23ba95f29efbb51ee9e11e0de first version

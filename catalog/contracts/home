@@ -1,0 +1,20 @@
+# GET /: what TIES is, the routes, and which code is running
+route     GET /
+handler   home
+memo      the contract of GET / on tiesapi.com
+input
+  nothing; the header Accept decides the form: text/html gets a page, anything else JSON
+processing
+  1 name the authority, the contact, the docs URL and the API URL
+  2 hash the running lambda_function.py: code_sha256
+  3 list the routes, and the template of one register line for POST /receipt
+output
+  200 {name, authority, contact, docs, api, code_sha256, routes, receipt}
+  check: code_sha256 equals sha256 of endpoint/lambda_function.py in the repository at the commit you expect
+graph
+  builds on docs
+  builds on contracts
+example
+  GET /
+versions
+  sha256:37a4591b1f1fdc4bc0a9bf4cb0a4844c8937d344d2e469ed0fd931144549ae22 first version

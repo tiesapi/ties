@@ -76,3 +76,10 @@ US-6 Ask Dr. Theisen.
 US-7 Get a receipt.
   As an operator, I get a receipt from tiesapi.com for a tie, without anything being stored there.
   Check: the endpoint returns a receipt; `/verify` accepts it; a changed tie is refused.
+
+US-9 Read a contract with the agent, and add one.
+  As an operator working with an AI assistant, I open the same page the agent reads, https://tiesapi.com/api/<name>:
+  what the route takes, what it does, what comes out, its graph, and an example the code runs as I look; I say
+  "yes, that's the one" or name something different. A new contract is one file in the same form.
+  Check: every route has one page in the one form; each example answers; each chain recomputes; a contract written
+  as one file is listed and routed with no change to the code.

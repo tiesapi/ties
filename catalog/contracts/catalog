@@ -1,0 +1,20 @@
+# GET /catalog: every label, its URL, its sha256 and its abstract
+route     GET /catalog
+handler   catalog
+memo      the contract of GET /catalog on tiesapi.com
+input
+  nothing
+processing
+  1 read the tie keywords: catalog/keywords.tsv
+  2 read every named entry: catalog/entries/<name>, the operator's own words, byte-exact
+  3 hash each entry's exact bytes; take its abstract: the title, and which of input, processing, output, graph it has
+  4 list the objects by content address: catalog/objects/<64 hex>, when there are any
+output
+  200 {keywords, entries: [{entry, url, sha256, title, parts}], objects: [{id, url, title, parts}]}
+  check: each sha256 equals the sha256 of GET /catalog/<entry> and of the file in git
+graph
+  the catalog in git (github.com/tiesapi/ties, catalog/entries/) is the public page content; drafts stay on the device
+example
+  GET /catalog
+versions
+  sha256:86642655d2171fcfddb1080516e6f113abf467dda0cea70d7f362a8903588332 first version
